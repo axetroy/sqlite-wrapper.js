@@ -1,11 +1,12 @@
 import assert from "node:assert";
-import path from "path";
-import outdent from "outdent";
-
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import test, { afterEach, beforeEach, describe } from "node:test";
 
+import outdent from "outdent";
+
 import { SQLiteWrapper } from "./index.js";
-import { fileURLToPath } from "url";
+import downloadSQLite3 from "../script/download-sqlite3.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,7 +22,8 @@ let sqlite;
 
 beforeEach(async () => {
 	// download the SQLite3 binary if it doesn't exist
-})
+	await downloadSQLite3();
+});
 
 afterEach(async () => {
 	await sqlite.close();

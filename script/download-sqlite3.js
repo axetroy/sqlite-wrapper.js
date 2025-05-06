@@ -93,8 +93,13 @@ async function main() {
 	console.log("Setting up SQLite3...");
 }
 
-main().catch((error) => {
-	console.error(error);
+// if main module
+if (fileURLToPath(import.meta.url) === process.argv[1]) {
+	// Execute the main function
+	main().catch((error) => {
+		console.error(error);
+		process.exit(1);
+	});
+}
 
-	process.exit(1);
-});
+export default main;
