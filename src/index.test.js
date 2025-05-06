@@ -23,6 +23,8 @@ let sqlite;
 beforeEach(async () => {
 	// download the SQLite3 binary if it doesn't exist
 	await downloadSQLite3();
+
+	sqlite = new SQLiteWrapper(SQLite3BinaryFile);
 });
 
 afterEach(async () => {
@@ -31,8 +33,6 @@ afterEach(async () => {
 
 describe("SQLiteWrapper", () => {
 	test("connect", async () => {
-		sqlite = new SQLiteWrapper(SQLite3BinaryFile);
-
 		await sqlite.exec(outdent`
 			CREATE TABLE IF NOT EXISTS users (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
