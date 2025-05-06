@@ -1,0 +1,62 @@
+{
+    "name": "sqlite-wrapper",
+    "version": "1.0.3",
+    "private": false,
+    "description": "A wrapper for SQLite3 with a focus on simplicity and ease of use.",
+    "sideEffects": false,
+    "files": [
+        "dist"
+    ],
+    "type": "module",
+    "main": "dist/cjs/index.cjs",
+    "module": "dist/esm/index.mjs",
+    "exports": {
+        "./package.json": {
+            "import": "./package.json",
+            "require": "./package.json"
+        },
+        ".": {
+            "require": {
+                "default": "./dist/cjs/index.cjs",
+                "types": "./dist/cjs/index.d.ts"
+            },
+            "import": {
+                "default": "./dist/esm/index.mjs",
+                "types": "./dist/esm/index.d.ts"
+            }
+        }
+    },
+    "scripts": {
+        "test": "node --test **/*.test.js",
+        "test:update-snapshots": "node --test-update-snapshots --test **/*.test.js",
+        "build": "knip && rslib build",
+        "prepack": "npm run build"
+    },
+    "author": "Axetroy <axetroy.dev@gmail.com>",
+    "license": "SEE LICENSE IN LICENSE",
+    "devDependencies": {
+        "@rslib/core": "^0.6.0",
+        "@types/node": "^22.14.1",
+        "adm-zip": "^0.5.16",
+        "axios": "^1.9.0",
+        "knip": "^5.53.0",
+        "outdent": "^0.8.0",
+        "typescript": "^5.8.3"
+    },
+    "keywords": [
+        "sqlite",
+		"sqlite3",
+		"wrapper",
+		"nodejs",
+		"javascript",
+		"typescript"
+    ],
+    "homepage": "https://github.com/axetroy/sqlite-wrapper#readme",
+    "bugs": {
+        "url": "https://github.com/axetroy/sqlite-wrapper/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/axetroy/sqlite-wrapper.git"
+    }
+}

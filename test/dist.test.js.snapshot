@@ -1,0 +1,33 @@
+exports[`test cjs output 1`] = `
+
+> cjs@1.0.0 test
+> node index.cjs
+
+{
+  and: [Function: and],
+  or: [Function: or],
+  xor: [Function: xor],
+  not: [Function: not],
+  leftShift: [Function: leftShift],
+  rightShift: [Function: rightShift],
+  zeroFillRightShift: [Function: zeroFillRightShift]
+}
+
+`;
+
+exports[`test esm output 1`] = `
+
+> esm@1.0.0 test
+> node index.mjs
+
+{
+  and: [Function: and],
+  or: [Function: or],
+  xor: [Function: xor],
+  not: [Function: not],
+  leftShift: [Function: leftShift],
+  rightShift: [Function: rightShift],
+  zeroFillRightShift: [Function: zeroFillRightShift]
+}
+
+`;
