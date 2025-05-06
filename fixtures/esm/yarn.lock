@@ -2,5 +2,5 @@
 # yarn lockfile v1
 
 
-sqlite-wrapper@../../:
+sqlite-wrapper.js@../../:
   version "1.0.0"

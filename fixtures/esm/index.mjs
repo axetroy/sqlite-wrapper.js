@@ -1,3 +1,3 @@
-import { SQLiteWrapper } from "sqlite-wrapper";
+import { SQLiteWrapper } from "sqlite-wrapper.js";
 
 console.log(SQLiteWrapper);
