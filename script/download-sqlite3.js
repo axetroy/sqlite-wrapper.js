@@ -1,8 +1,9 @@
+import fs from "node:fs";
+import path, { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import AdmZip from "adm-zip";
 import axios from "axios";
-import fs from "fs";
-import path, { join } from "path";
-import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
