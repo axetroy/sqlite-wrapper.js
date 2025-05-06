@@ -38,7 +38,7 @@ export class SQLiteWrapper {
 						this.current.resolve(result);
 					}
 					this.current = null;
-					this._processQueue();
+					this.#processQueue();
 				}
 			} else {
 				this.buffer += line + "\n";
@@ -54,14 +54,14 @@ export class SQLiteWrapper {
 		});
 	}
 
-	async _execSQL(sql) {
+	async #execSQL(sql) {
 		return new Promise((resolve, reject) => {
 			this.queue.push({ sql, resolve, reject, raw: false });
-			if (!this.current) this._processQueue();
+			if (!this.current) this.#processQueue();
 		});
 	}
 
-	async _execCommand(command) {
+	async #execCommand(command) {
 		return new Promise((resolve, reject) => {
 			this.queue.push({
 				sql: command,
@@ -70,11 +70,11 @@ export class SQLiteWrapper {
 				raw: true,
 			});
 
-			if (!this.current) this._processQueue();
+			if (!this.current) this.#processQueue();
 		});
 	}
 
-	_processQueue() {
+	#processQueue() {
 		if (this.closed || this.current || this.queue.length === 0) return;
 		this.current = this.queue.shift();
 
@@ -92,13 +92,13 @@ export class SQLiteWrapper {
 	}
 
 	async exec(sql) {
-		return this._execSQL(sql);
+		return this.#execSQL(sql);
 	}
 
 	async query(sql) {
-		await this._execCommand(".mode json");
+		await this.#execCommand(".mode json");
 
-		const result = await this._execSQL(sql);
+		const result = await this.#execSQL(sql);
 		try {
 			return JSON.parse(result);
 		} catch (error) {
