@@ -62,4 +62,28 @@ describe("SQLiteWrapper", () => {
 			{ id: 2, name: "Bob" },
 		]);
 	});
+
+	test("create table and query and update", async () => {
+		await sqlite.exec(outdent`
+			CREATE TABLE IF NOT EXISTS users (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT
+			);
+
+			INSERT INTO users (name) VALUES ('Alice');
+			INSERT INTO users (name) VALUES ('Bob');
+		`);
+
+		const rows = await sqlite.query("SELECT * FROM users");
+
+		assert.deepEqual(rows, [
+			{ id: 1, name: "Alice" },
+			{ id: 2, name: "Bob" },
+		]);
+
+		// Update
+		await sqlite.exec("UPDATE users SET name = 'Charlie' WHERE id = 1");
+		const updatedRows = await sqlite.query("SELECT * FROM users WHERE id = 1");
+		assert.deepEqual(updatedRows, [{ id: 1, name: "Charlie" }]);
+	});
 });
