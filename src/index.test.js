@@ -32,7 +32,19 @@ afterEach(async () => {
 });
 
 describe("SQLiteWrapper", () => {
-	test("connect", async () => {
+	test("create table", async () => {
+		await sqlite.exec(outdent`
+			CREATE TABLE IF NOT EXISTS users (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT
+			);
+
+			INSERT INTO users (name) VALUES ('Alice');
+			INSERT INTO users (name) VALUES ('Bob');
+		`);
+	});
+
+	test("create table and query", async () => {
 		await sqlite.exec(outdent`
 			CREATE TABLE IF NOT EXISTS users (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
