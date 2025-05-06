@@ -61,6 +61,19 @@ export class SQLiteWrapper {
 		});
 	}
 
+	async _execCommand(command) {
+		return new Promise((resolve, reject) => {
+			this.queue.push({
+				sql: command,
+				resolve,
+				reject,
+				raw: true,
+			});
+
+			if (!this.current) this._processQueue();
+		});
+	}
+
 	_processQueue() {
 		if (this.closed || this.current || this.queue.length === 0) return;
 		this.current = this.queue.shift();
@@ -78,25 +91,12 @@ export class SQLiteWrapper {
 		}
 	}
 
-	async _runCommand(command) {
-		return new Promise((resolve, reject) => {
-			this.queue.push({
-				sql: command,
-				resolve,
-				reject,
-				raw: true,
-			});
-
-			if (!this.current) this._processQueue();
-		});
-	}
-
 	async exec(sql) {
 		return this._execSQL(sql);
 	}
 
 	async query(sql) {
-		await this._runCommand(".mode json");
+		await this._execCommand(".mode json");
 
 		const result = await this._execSQL(sql);
 		try {
