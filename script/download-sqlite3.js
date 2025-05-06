@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { EOL } from "node:os";
 import path, { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,7 +30,7 @@ async function downloadFileWithProgress(url, outputPath) {
 
 		// 避免频繁打印
 		if (percent !== lastPercent && percent % 5 === 0) {
-			process.stdout.write(`下载进度: ${percent}%\r`);
+			process.stdout.write(`下载进度: ${percent}%` + EOL);
 			lastPercent = percent;
 		}
 	});
