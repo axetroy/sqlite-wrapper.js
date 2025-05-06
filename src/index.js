@@ -81,13 +81,15 @@ export class SQLiteWrapper {
 		const trimmed = this.current.sql.trim();
 		const isNeedsSemicolon = !trimmed.endsWith(";");
 
+		const endSignal = "SELECT '__END__';" + EOL;
+
 		if (this.current.raw) {
-			// Shell command: don't append SELECT
 			this.proc.stdin.write(trimmed + EOL);
-			this.proc.stdin.write("SELECT '__END__';" + EOL);
+			this.proc.stdin.write(endSignal);
 		} else {
-			const toSend = trimmed + (isNeedsSemicolon ? ";" : "") + EOL + "SELECT '__END__';" + EOL;
-			this.proc.stdin.write(toSend);
+			const toSend = trimmed + (isNeedsSemicolon ? ";" : "");
+			this.proc.stdin.write(toSend + EOL);
+			this.proc.stdin.write(endSignal);
 		}
 	}
 
