@@ -41,7 +41,7 @@ export class SQLiteWrapper {
 					this.#processQueue();
 				}
 			} else {
-				this.buffer += line + "\n";
+				this.buffer += line + EOL;
 			}
 		});
 
