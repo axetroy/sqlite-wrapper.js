@@ -5,7 +5,7 @@
 ![Node](https://img.shields.io/badge/node-%3E=14-blue.svg?style=flat-square)
 [![npm version](https://badge.fury.io/js/sqlite-wrapper.svg)](https://badge.fury.io/js/sqlite-wrapper)
 
-A utility for bitwise operations that supports both `number` and `bigint` types in JavaScript/TypeScript.
+A wrapper for SQLite3 with a focus on simplicity and ease of use.
 
 ## Installation
 
