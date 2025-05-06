@@ -7,6 +7,8 @@
 
 A wrapper for SQLite3 with a focus on simplicity and ease of use.
 
+It uses the SQLite3 executable file for database operations and it's zero-dependencies.
+
 ## Installation
 
 ```bash
