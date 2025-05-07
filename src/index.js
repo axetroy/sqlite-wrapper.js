@@ -3,16 +3,14 @@ import { EOL } from "node:os";
 import readline from "node:readline";
 
 export class SQLiteWrapper {
-	constructor(exePath = "sqlite3.exe", dbPath) {
-		this.exePath = exePath;
-		this.dbPath = dbPath;
+	constructor(sqlite3ExePath, dbPath) {
 		this.queue = [];
 		this.current = null;
 		this.closed = false;
 		this.buffer = "";
 		this.stderrBuffer = "";
 
-		this.proc = spawn(this.exePath, this.dbPath ? [this.dbPath] : [], { stdio: "pipe" });
+		this.proc = spawn(sqlite3ExePath, dbPath ? [dbPath] : [], { stdio: "pipe" });
 
 		this.rl = readline.createInterface({
 			input: this.proc.stdout,
@@ -42,6 +40,14 @@ export class SQLiteWrapper {
 				}
 			} else {
 				this.buffer += line + EOL;
+			}
+		});
+
+		this.proc.on("error", (error) => {
+			this.closed = true;
+			if (this.current) {
+				this.current.reject(new Error("sqlite3 process error: " + error.message));
+				this.current = null;
 			}
 		});
 
