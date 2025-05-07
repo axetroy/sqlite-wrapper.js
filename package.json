@@ -51,12 +51,12 @@
         "javascript",
         "typescript"
     ],
-    "homepage": "https://github.com/axetroy/sqlite-wrapper#readme",
+    "homepage": "https://github.com/axetroy/sqlite-wrapper.js#readme",
     "bugs": {
-        "url": "https://github.com/axetroy/sqlite-wrapper/issues"
+        "url": "https://github.com/axetroy/sqlite-wrapper.js/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/axetroy/sqlite-wrapper.git"
+        "url": "git+https://github.com/axetroy/sqlite-wrapper.js.git"
     }
 }
