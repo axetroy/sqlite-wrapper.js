@@ -13,9 +13,9 @@ class RspackDtsCopyPlugin {
 		compiler.hooks.emit.tapPromise("RspackDtsCopyPlugin", async (compilation) => {
 			const target = path.join(projectDir, "src/index.d.ts");
 
-			compilation.emitAsset("esm/index.d.ts", new compiler.webpack.sources.RawSource(await fs.promises.readFile(target, "utf8")));
+			compilation.emitAsset("esm/index.d.mts", new compiler.webpack.sources.RawSource(await fs.promises.readFile(target, "utf8")));
 
-			compilation.emitAsset("cjs/index.d.ts", new compiler.webpack.sources.RawSource(await fs.promises.readFile(target, "utf8")));
+			compilation.emitAsset("cjs/index.d.cts", new compiler.webpack.sources.RawSource(await fs.promises.readFile(target, "utf8")));
 		});
 	}
 }
