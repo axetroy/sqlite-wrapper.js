@@ -54,9 +54,19 @@ export class SQLiteWrapper {
 		});
 	}
 
-	async #execSQL(sql) {
+	async #execSQL(sql, params = []) {
+		if (!Array.isArray(params)) {
+			throw new Error("Query parameters must be an array");
+		}
+
+		let index = 0;
+		const finalSQL = sql.replace(/\?/g, () => {
+			if (index >= params.length) throw new Error("Too few parameters provided");
+			return SQLiteWrapper.#escape(params[index++]);
+		});
+
 		return new Promise((resolve, reject) => {
-			this.queue.push({ sql, resolve, reject, raw: false });
+			this.queue.push({ sql: finalSQL, resolve, reject, raw: false });
 			if (!this.current) this.#processQueue();
 		});
 	}
@@ -93,14 +103,31 @@ export class SQLiteWrapper {
 		}
 	}
 
-	async exec(sql) {
-		return this.#execSQL(sql);
+	/**
+	 *
+	 * @param {string} value
+	 * @returns {string}
+	 */
+	static #escape(value) {
+		if (typeof value === "string") {
+			return `'${value.replace(/'/g, "''")}'`; // Escape single quotes
+		}
+
+		if (value === null || value === undefined) return "NULL";
+
+		if (typeof value === "number" || typeof value === "bigint") return value.toString();
+
+		throw new Error("Unsupported parameter type: " + typeof value);
 	}
 
-	async query(sql) {
+	async exec(sql, params = []) {
+		return this.#execSQL(sql, params);
+	}
+
+	async query(sql, params = []) {
 		await this.#execCommand(".mode json");
 
-		const result = await this.#execSQL(sql);
+		const result = await this.#execSQL(sql, params);
 		try {
 			return JSON.parse(result);
 		} catch (error) {

@@ -33,27 +33,33 @@ afterEach(async () => {
 
 describe("SQLiteWrapper", () => {
 	test("create table", async () => {
-		await sqlite.exec(outdent`
-			CREATE TABLE IF NOT EXISTS users (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				name TEXT
-			);
+		await sqlite.exec(
+			outdent`
+				CREATE TABLE IF NOT EXISTS users (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT
+				);
 
-			INSERT INTO users (name) VALUES ('Alice');
-			INSERT INTO users (name) VALUES ('Bob');
-		`);
+				INSERT INTO users (name) VALUES (?);
+				INSERT INTO users (name) VALUES (?);
+		`,
+			["Alice", "Bob"]
+		);
 	});
 
 	test("create table and query", async () => {
-		await sqlite.exec(outdent`
-			CREATE TABLE IF NOT EXISTS users (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				name TEXT
-			);
+		await sqlite.exec(
+			outdent`
+				CREATE TABLE IF NOT EXISTS users (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT
+				);
 
-			INSERT INTO users (name) VALUES ('Alice');
-			INSERT INTO users (name) VALUES ('Bob');
-		`);
+				INSERT INTO users (name) VALUES (?);
+				INSERT INTO users (name) VALUES (?);
+		`,
+			["Alice", "Bob"]
+		);
 
 		const rows = await sqlite.query("SELECT * FROM users");
 
@@ -64,15 +70,18 @@ describe("SQLiteWrapper", () => {
 	});
 
 	test("create table and query and update", async () => {
-		await sqlite.exec(outdent`
-			CREATE TABLE IF NOT EXISTS users (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				name TEXT
-			);
+		await sqlite.exec(
+			outdent`
+				CREATE TABLE IF NOT EXISTS users (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT
+				);
 
-			INSERT INTO users (name) VALUES ('Alice');
-			INSERT INTO users (name) VALUES ('Bob');
-		`);
+				INSERT INTO users (name) VALUES (?);
+				INSERT INTO users (name) VALUES (?);
+		`,
+			["Alice", "Bob"]
+		);
 
 		const rows = await sqlite.query("SELECT * FROM users");
 
@@ -82,8 +91,8 @@ describe("SQLiteWrapper", () => {
 		]);
 
 		// Update
-		await sqlite.exec("UPDATE users SET name = 'Charlie' WHERE id = 1");
-		const updatedRows = await sqlite.query("SELECT * FROM users WHERE id = 1");
+		await sqlite.exec("UPDATE users SET name = 'Charlie' WHERE id = ?", [1]);
+		const updatedRows = await sqlite.query("SELECT * FROM users WHERE id = ?", [1]);
 		assert.deepEqual(updatedRows, [{ id: 1, name: "Charlie" }]);
 	});
 });
