@@ -21,7 +21,7 @@ npm install sqlite-wrapper.js --save
 import { SQLiteWrapper } from "sqlite-wrapper.js";
 
 // Initialize the sqlite process
-const sqlite = new SQLiteWrapper("/path/to/sqlite3", "/path/to/database.db");
+const sqlite = new SQLiteWrapper("/path/to/sqlite3", { dbPath: "/path/to/database.db" });
 
 // Create a table
 await sqlite.exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)");
