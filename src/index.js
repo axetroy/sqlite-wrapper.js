@@ -3,12 +3,18 @@ import { EOL } from "node:os";
 import readline from "node:readline";
 
 export class SQLiteWrapper {
-	constructor(sqlite3ExePath, dbPath) {
+	/**
+	 *
+	 * @param {string} sqlite3ExePath
+	 * @param {import('./index').SQLiteWrapperOptions} param1
+	 */
+	constructor(sqlite3ExePath, { dbPath, logger } = {}) {
 		this.queue = [];
 		this.current = null;
 		this.closed = false;
 		this.buffer = "";
 		this.stderrBuffer = "";
+		this.logger = logger;
 
 		this.proc = spawn(sqlite3ExePath, dbPath ? [dbPath] : [], { stdio: "pipe" });
 
@@ -94,16 +100,19 @@ export class SQLiteWrapper {
 		if (this.closed || this.current || this.queue.length === 0) return;
 		this.current = this.queue.shift();
 
-		const trimmed = this.current.sql.trim();
-		const isNeedsSemicolon = !trimmed.endsWith(";");
+		const trimmedSQL = this.current.sql.trim();
+
+		this.logger?.debug("Executing SQL:", trimmedSQL);
+
+		const isNeedsSemicolon = !trimmedSQL.endsWith(";");
 
 		const endSignal = "SELECT '__END__';" + EOL;
 
 		if (this.current.raw) {
-			this.proc.stdin.write(trimmed + EOL);
+			this.proc.stdin.write(trimmedSQL + EOL);
 			this.proc.stdin.write(endSignal);
 		} else {
-			const toSend = trimmed + (isNeedsSemicolon ? ";" : "");
+			const toSend = trimmedSQL + (isNeedsSemicolon ? ";" : "");
 			this.proc.stdin.write(toSend + EOL);
 			this.proc.stdin.write(endSignal);
 		}
