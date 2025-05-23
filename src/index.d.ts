@@ -8,8 +8,6 @@ export interface Logger {
 	error(...messages: unknown[]): void;
 
 	debug(...messages: unknown[]): void;
-
-	scope(name: string): Logger;
 }
 
 interface SQLiteWrapperOptions {
