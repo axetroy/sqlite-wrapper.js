@@ -150,6 +150,16 @@ export class SQLiteWrapper {
 		}
 	}
 
+	async queryOne(sql, params = []) {
+		const rows = await this.query(sql, params);
+
+		if (rows.length === 0) return null;
+
+		if (rows.length > 1) throw new Error("Query returned more than one row");
+
+		return rows[0];
+	}
+
 	async close() {
 		this.proc.stdin.end();
 		this.closed = true;
