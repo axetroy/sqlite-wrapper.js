@@ -143,6 +143,12 @@ export class SQLiteWrapper {
 		await this.#execCommand(".mode json");
 
 		const result = await this.#execSQL(sql, params);
+
+		// Handle empty result set
+		if (typeof result === "string" && result.trim() === "") {
+			return [];
+		}
+
 		try {
 			return JSON.parse(result);
 		} catch (error) {
