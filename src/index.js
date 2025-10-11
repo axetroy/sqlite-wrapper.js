@@ -146,7 +146,7 @@ export class SQLiteWrapper {
 		try {
 			return JSON.parse(result);
 		} catch (error) {
-			throw new Error("Invalid JSON from sqlite3: " + error.message);
+			throw new Error("Invalid JSON from sqlite3: " + result);
 		}
 	}
 

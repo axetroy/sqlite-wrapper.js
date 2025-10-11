@@ -10,7 +10,7 @@ export interface Logger {
 	debug(...messages: unknown[]): void;
 }
 
-interface SQLiteWrapperOptions {
+export interface SQLiteWrapperOptions {
 	dbPath?: string;
 	logger?: Logger;
 }
