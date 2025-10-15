@@ -3,6 +3,8 @@ import { EOL } from "node:os";
 import readline from "node:readline";
 
 export class SQLiteWrapper {
+	#modeIsSet = false;
+
 	/**
 	 *
 	 * @param {string} sqlite3ExePath
@@ -16,15 +18,40 @@ export class SQLiteWrapper {
 		this.stderrBuffer = "";
 		this.logger = logger;
 
-		this.proc = spawn(sqlite3ExePath, dbPath ? [dbPath] : [], { stdio: "pipe" });
+		this.#init(sqlite3ExePath, dbPath);
+	}
 
-		this.rl = readline.createInterface({
-			input: this.proc.stdout,
-			terminal: false,
+	#init(sqlite3ExePath, dbPath) {
+		this.proc = spawn(sqlite3ExePath, dbPath ? [dbPath] : [], { stdio: "pipe" });
+		this.proc.stdin.setDefaultEncoding("utf-8");
+
+		this.proc.on("error", (err) => {
+			this.logger?.error("Failed to start sqlite3 process:", err);
 		});
 
 		this.proc.stderr.on("data", (data) => {
 			this.stderrBuffer += data.toString();
+		});
+
+		this.proc.on("error", (error) => {
+			this.closed = true;
+			if (this.current) {
+				this.current.reject(new Error("sqlite3 process error: " + error.message));
+				this.current = null;
+			}
+		});
+
+		this.proc.on("close", () => {
+			this.closed = true;
+			if (this.current) {
+				this.current.reject(new Error("sqlite3 process closed unexpectedly"));
+				this.current = null;
+			}
+		});
+
+		this.rl = readline.createInterface({
+			input: this.proc.stdout,
+			terminal: false,
 		});
 
 		this.rl.on("line", (line) => {
@@ -46,22 +73,6 @@ export class SQLiteWrapper {
 				}
 			} else {
 				this.buffer += line + EOL;
-			}
-		});
-
-		this.proc.on("error", (error) => {
-			this.closed = true;
-			if (this.current) {
-				this.current.reject(new Error("sqlite3 process error: " + error.message));
-				this.current = null;
-			}
-		});
-
-		this.proc.on("close", () => {
-			this.closed = true;
-			if (this.current) {
-				this.current.reject(new Error("sqlite3 process closed unexpectedly"));
-				this.current = null;
 			}
 		});
 	}
@@ -140,7 +151,10 @@ export class SQLiteWrapper {
 	}
 
 	async query(sql, params = []) {
-		await this.#execCommand(".mode json");
+		if (!this.#modeIsSet) {
+			await this.#execCommand(".mode json");
+			this.#modeIsSet = true;
+		}
 
 		const result = await this.#execSQL(sql, params);
 
@@ -156,18 +170,9 @@ export class SQLiteWrapper {
 		}
 	}
 
-	async queryOne(sql, params = []) {
-		const rows = await this.query(sql, params);
-
-		if (rows.length === 0) return null;
-
-		if (rows.length > 1) throw new Error("Query returned more than one row");
-
-		return rows[0];
-	}
-
 	async close() {
-		this.proc.stdin.end();
 		this.closed = true;
+		this.proc.stdin.end();
+		this.proc.kill();
 	}
 }

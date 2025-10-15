@@ -40,13 +40,6 @@ export declare class SQLiteWrapper {
 	query(sql: string, params?: any[]): Promise<any[]>;
 
 	/**
-	 * Executes a SQL query and returns the first row of the result.
-	 * @param sql SQL query to execute
-	 * @param params Query parameters
-	 */
-	queryOne(sql: string, params?: any[]): Promise<any>;
-
-	/**
 	 * Closes the SQLite connection (Process).
 	 */
 	close(): Promise<void>;
