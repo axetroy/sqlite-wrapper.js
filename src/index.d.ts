@@ -37,7 +37,7 @@ export declare class SQLiteWrapper {
 	 * @param sql SQL query to execute
 	 * @param params Query parameters
 	 */
-	query(sql: string, params?: any[]): Promise<any[]>;
+	query<T = any>(sql: string, params?: any[]): Promise<T[]>;
 
 	/**
 	 * Closes the SQLite connection (Process).
