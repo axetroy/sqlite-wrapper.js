@@ -1,178 +1,144 @@
 import { spawn } from "node:child_process";
-import { EOL } from "node:os";
 import readline from "node:readline";
+import { EOL } from "node:os";
+import { interpolateSQL } from "./utils.js";
+import { END_SIGNAL, END_MARKERS } from "./constants.js";
 
 export class SQLiteWrapper {
+	#queue = [];
+	#current = null;
+	#closed = false;
+	#stdoutBuffer = "";
+	#stderrBuffer = "";
+	#proc;
+	#rl;
+	#logger;
 	#modeIsSet = false;
 
-	/**
-	 *
-	 * @param {string} sqlite3ExePath
-	 * @param {import('./index').SQLiteWrapperOptions} param1
-	 */
 	constructor(sqlite3ExePath, { dbPath, logger } = {}) {
-		this.queue = [];
-		this.current = null;
-		this.closed = false;
-		this.buffer = "";
-		this.stderrBuffer = "";
-		this.logger = logger;
-
-		this.#init(sqlite3ExePath, dbPath);
+		this.#logger = logger;
+		this.#initProcess(sqlite3ExePath, dbPath);
 	}
 
-	#init(sqlite3ExePath, dbPath) {
-		this.proc = spawn(sqlite3ExePath, dbPath ? [dbPath] : [], { stdio: "pipe" });
-		this.proc.stdin.setDefaultEncoding("utf-8");
+	// ----------------------------
+	// 进程初始化与事件绑定
+	// ----------------------------
+	#initProcess(sqlite3ExePath, dbPath) {
+		this.#proc = spawn(sqlite3ExePath, dbPath ? [dbPath] : [], { stdio: "pipe" });
+		this.#proc.stdin.setDefaultEncoding("utf-8");
 
-		this.proc.on("error", (err) => {
-			this.logger?.error("Failed to start sqlite3 process:", err);
+		this.#bindProcessEvents();
+		this.#setupStdoutReader();
+	}
+
+	#bindProcessEvents() {
+		this.#proc.on("error", (err) => {
+			this.#logger?.error("sqlite3 process error:", err);
+			this.#handleFatalError(err);
 		});
 
-		this.proc.stderr.on("data", (data) => {
-			this.stderrBuffer += data.toString();
+		this.#proc.stderr.on("data", (chunk) => {
+			this.#stderrBuffer += chunk.toString();
 		});
 
-		this.proc.on("error", (error) => {
-			this.closed = true;
-			if (this.current) {
-				this.current.reject(new Error("sqlite3 process error: " + error.message));
-				this.current = null;
-			}
-		});
-
-		this.proc.on("close", () => {
-			this.closed = true;
-			if (this.current) {
-				this.current.reject(new Error("sqlite3 process closed unexpectedly"));
-				this.current = null;
-			}
-		});
-
-		this.rl = readline.createInterface({
-			input: this.proc.stdout,
-			terminal: false,
-		});
-
-		this.rl.on("line", (line) => {
-			const trimmed = line.trim();
-
-			if (trimmed === `[{"'__END__'":"__END__"}]` || trimmed === "__END__") {
-				const result = this.buffer.trim();
-				const error = this.stderrBuffer.trim();
-				this.buffer = "";
-				this.stderrBuffer = "";
-				if (this.current) {
-					if (error) {
-						this.current.reject(new Error(error));
-					} else {
-						this.current.resolve(result);
-					}
-					this.current = null;
-					this.#processQueue();
-				}
-			} else {
-				this.buffer += line + EOL;
-			}
+		this.#proc.on("close", () => {
+			this.#handleFatalError(new Error("sqlite3 process closed unexpectedly"));
 		});
 	}
 
-	async #execSQL(sql, params = []) {
-		if (!Array.isArray(params)) {
-			throw new Error("Query parameters must be an array");
-		}
-
-		let index = 0;
-		const finalSQL = sql.replace(/\?/g, () => {
-			if (index >= params.length) throw new Error("Too few parameters provided");
-			return SQLiteWrapper.#escape(params[index++]);
-		});
-
-		return new Promise((resolve, reject) => {
-			this.queue.push({ sql: finalSQL, resolve, reject, raw: false });
-			if (!this.current) this.#processQueue();
-		});
+	#setupStdoutReader() {
+		this.#rl = readline.createInterface({ input: this.#proc.stdout, terminal: false });
+		this.#rl.on("line", (line) => this.#handleLine(line.trim()));
 	}
 
-	async #execCommand(command) {
-		return new Promise((resolve, reject) => {
-			this.queue.push({
-				sql: command,
-				resolve,
-				reject,
-				raw: true,
-			});
-
-			if (!this.current) this.#processQueue();
-		});
-	}
-
-	#processQueue() {
-		if (this.closed || this.current || this.queue.length === 0) return;
-		this.current = this.queue.shift();
-
-		const trimmedSQL = this.current.sql.trim();
-
-		this.logger?.debug("Executing SQL:", trimmedSQL);
-
-		const isNeedsSemicolon = !trimmedSQL.endsWith(";");
-
-		const endSignal = "SELECT '__END__';" + EOL;
-
-		if (this.current.raw) {
-			this.proc.stdin.write(trimmedSQL + EOL);
-			this.proc.stdin.write(endSignal);
-		} else {
-			const toSend = trimmedSQL + (isNeedsSemicolon ? ";" : "");
-			this.proc.stdin.write(toSend + EOL);
-			this.proc.stdin.write(endSignal);
-		}
-	}
-
-	/**
-	 *
-	 * @param {string} value
-	 * @returns {string}
-	 */
-	static #escape(value) {
-		if (typeof value === "string") {
-			return `'${value.replace(/'/g, "''")}'`; // Escape single quotes
-		}
-
-		if (value === null || value === undefined) return "NULL";
-
-		if (typeof value === "number" || typeof value === "bigint") return value.toString();
-
-		throw new Error("Unsupported parameter type: " + typeof value);
-	}
-
+	// ----------------------------
+	// 主接口方法
+	// ----------------------------
 	async exec(sql, params = []) {
-		return this.#execSQL(sql, params);
+		return this.#enqueueSQL(sql, params);
 	}
 
 	async query(sql, params = []) {
 		if (!this.#modeIsSet) {
-			await this.#execCommand(".mode json");
+			await this.#enqueueCommand(".mode json");
 			this.#modeIsSet = true;
 		}
 
-		const result = await this.#execSQL(sql, params);
-
-		// Handle empty result set
-		if (typeof result === "string" && result.trim() === "") {
-			return [];
-		}
+		const raw = await this.#enqueueSQL(sql, params);
+		if (!raw.trim()) return [];
 
 		try {
-			return JSON.parse(result);
-		} catch (error) {
-			throw new Error("Invalid JSON from sqlite3: " + result);
+			return JSON.parse(raw);
+		} catch {
+			throw new Error("Invalid JSON from sqlite3: " + raw);
 		}
 	}
 
 	async close() {
-		this.closed = true;
-		this.proc.stdin.end();
-		this.proc.kill();
+		this.#closed = true;
+		this.#rl?.close();
+		this.#proc?.stdin?.end();
+		this.#proc?.kill();
+	}
+
+	// ----------------------------
+	// 队列系统
+	// ----------------------------
+	#enqueueSQL(sql, params) {
+		const formatted = interpolateSQL(sql, params);
+
+		return new Promise((resolve, reject) => {
+			this.#queue.push({ sql: formatted, resolve, reject, isRaw: false });
+			this.#maybeProcessNext();
+		});
+	}
+
+	#enqueueCommand(command) {
+		return new Promise((resolve, reject) => {
+			this.#queue.push({ sql: command, resolve, reject, isRaw: true });
+			this.#maybeProcessNext();
+		});
+	}
+
+	#maybeProcessNext() {
+		if (this.#closed || this.#current || this.#queue.length === 0) return;
+		this.#current = this.#queue.shift();
+
+		const { sql, isRaw } = this.#current;
+		const statement = isRaw ? sql : sql.trim().replace(/;*$/, ";");
+
+		this.#logger?.debug?.("Executing SQL:", statement);
+		this.#proc.stdin.write(statement + EOL + END_SIGNAL);
+	}
+
+	#handleLine(line) {
+		if (END_MARKERS.has(line)) {
+			this.#finalizeCurrent();
+		} else {
+			this.#stdoutBuffer += line + EOL;
+		}
+	}
+
+	#finalizeCurrent() {
+		const result = this.#stdoutBuffer.trim();
+		const error = this.#stderrBuffer.trim();
+
+		this.#stdoutBuffer = "";
+		this.#stderrBuffer = "";
+
+		if (!this.#current) return;
+		const { resolve, reject } = this.#current;
+		this.#current = null;
+
+		error ? reject(new Error(error)) : resolve(result);
+		this.#maybeProcessNext();
+	}
+
+	#handleFatalError(error) {
+		this.#closed = true;
+		if (this.#current) {
+			this.#current.reject(new Error("sqlite3 process error: " + error.message, { cause: error }));
+			this.#current = null;
+		}
 	}
 }
