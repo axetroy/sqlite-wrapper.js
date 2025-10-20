@@ -3,7 +3,7 @@
  * @param {any} value
  * @returns {string}
  */
-function escapeValue(value) {
+export function escapeValue(value) {
 	if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`;
 	if (value === null || value === undefined) return "NULL";
 	if (typeof value === "number" || typeof value === "bigint") return String(value);

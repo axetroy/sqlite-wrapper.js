@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { EOL } from "node:os";
-import { interpolateSQL } from "./utils.js";
 import { END_SIGNAL, END_MARKERS } from "./constants.js";
+export { escapeValue, interpolateSQL } from "./utils.js";
 
 export class SQLiteWrapper {
 	#queue = [];

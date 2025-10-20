@@ -1,3 +1,5 @@
+export * from "./utils.js";
+
 export interface Logger {
 	log(...messages: unknown[]): void;
 
