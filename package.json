@@ -1,6 +1,6 @@
 {
     "name": "sqlite-wrapper.js",
-    "version": "3.0.0",
+    "version": "3.0.1",
     "private": false,
     "description": "A wrapper for SQLite3 with a focus on simplicity and ease of use.",
     "sideEffects": false,
