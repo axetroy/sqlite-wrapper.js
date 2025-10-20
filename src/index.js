@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { EOL } from "node:os";
 import { END_SIGNAL, END_MARKERS } from "./constants.js";
+import { interpolateSQL } from "./utils.js";
 export { escapeValue, interpolateSQL } from "./utils.js";
 
 export class SQLiteWrapper {
