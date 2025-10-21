@@ -7,6 +7,8 @@ export function escapeValue(value) {
 	if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`;
 	if (value === null || value === undefined) return "NULL";
 	if (typeof value === "number" || typeof value === "bigint") return String(value);
+	if (typeof value === "boolean") return value.toString().toUpperCase();
+	if (value instanceof Date) return `'${value.toISOString()}'`;
 	throw new TypeError(`Unsupported parameter type: ${typeof value}`);
 }
 
