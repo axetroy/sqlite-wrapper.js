@@ -19,6 +19,9 @@ export function escapeValue(value) {
  * @returns {string}
  */
 export function interpolateSQL(sql, params) {
+	// Fast path: if no parameters, return as-is
+	if (params.length === 0) return sql;
+	
 	let i = 0;
 	return sql.replace(/\?/g, () => {
 		if (i >= params.length) throw new Error("Too few parameters provided");
