@@ -9,7 +9,7 @@ export class SQLiteWrapper {
 	#queue = [];
 	#current = null;
 	#closed = false;
-	#stdoutBuffer = "";
+	#stdoutLines = [];
 	#stderrBuffer = "";
 	#proc;
 	#rl;
@@ -39,7 +39,13 @@ export class SQLiteWrapper {
 		});
 
 		this.#proc.stderr.on("data", (chunk) => {
-			this.#stderrBuffer += chunk.toString();
+			const newData = chunk.toString();
+			// Limit stderr buffer to prevent memory issues (max 1MB)
+			if (this.#stderrBuffer.length + newData.length > 1048576) {
+				this.#stderrBuffer = this.#stderrBuffer.slice(-524288) + newData;
+			} else {
+				this.#stderrBuffer += newData;
+			}
 		});
 
 		this.#proc.on("close", () => {
@@ -106,7 +112,8 @@ export class SQLiteWrapper {
 		this.#current = this.#queue.shift();
 
 		const { sql, isRaw } = this.#current;
-		const statement = isRaw ? sql : sql.trim().replace(/;*$/, ";");
+		// Optimize: reduce string operations by checking for semicolon first
+		const statement = isRaw ? sql : (sql.endsWith(";") ? sql : sql.trimEnd() + ";");
 
 		this.#logger?.debug?.("Executing SQL:", statement);
 		this.#proc.stdin.write(statement + EOL + END_SIGNAL);
@@ -116,15 +123,19 @@ export class SQLiteWrapper {
 		if (END_MARKERS.has(line)) {
 			this.#finalizeCurrent();
 		} else {
-			this.#stdoutBuffer += line + EOL;
+			// Limit stdout buffer to prevent memory issues (max 10000 lines)
+			if (this.#stdoutLines.length >= 10000) {
+				this.#stdoutLines.shift();
+			}
+			this.#stdoutLines.push(line);
 		}
 	}
 
 	#finalizeCurrent() {
-		const result = this.#stdoutBuffer.trim();
+		const result = this.#stdoutLines.join(EOL).trim();
 		const error = this.#stderrBuffer.trim();
 
-		this.#stdoutBuffer = "";
+		this.#stdoutLines = [];
 		this.#stderrBuffer = "";
 
 		if (!this.#current) return;
@@ -137,6 +148,10 @@ export class SQLiteWrapper {
 
 	#handleFatalError(error) {
 		this.#closed = true;
+		// Clear buffers to prevent memory leaks
+		this.#stdoutLines = [];
+		this.#stderrBuffer = "";
+		
 		if (this.#current) {
 			this.#current.reject(new Error("sqlite3 process error: " + error.message, { cause: error }));
 			this.#current = null;
