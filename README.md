@@ -280,6 +280,27 @@ npm run benchmark
 
 This will test various operations including table creation, inserts, queries, updates, deletes, and JOIN operations. See the [benchmark directory](./benchmark/README.md) for more details.
 
+<details><summary>MacOS M3Pro Benchmark Results</summary>
+
+```
+================================================================================
+SQLite Wrapper Benchmark Results
+================================================================================
+Benchmark                                  Avg (ms)   Min (ms)   Max (ms)    Ops/sec
+--------------------------------------------------------------------------------
+Table Creation                                0.350      0.217      0.999    2856.10
+Single Row Insert                             0.261      0.184      2.337    3824.36
+Bulk Insert (100 rows with transaction)       1.884      1.639      2.526     530.90
+Simple SELECT (1000 rows)                     1.721      1.652      2.889     581.18
+SELECT with WHERE clause                      0.885      0.853      0.994    1130.04
+UPDATE Single Row                             0.214      0.019      0.670    4668.93
+DELETE Single Row                             0.274      0.175      0.560    3651.09
+JOIN Query (1000 orders, 100 customers)       1.994      1.917      2.225     501.44
+Transaction (5 inserts)                       0.325      0.251      0.484    3078.36
+================================================================================
+```
+</summary>
+
 ## License
 
 The [Anti 996 License](LICENSE)
