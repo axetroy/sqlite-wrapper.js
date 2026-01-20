@@ -27,9 +27,7 @@ beforeEach(async () => {
 	sqlite = new SQLiteWrapper(SQLite3BinaryFile);
 });
 
-afterEach(async () => {
-	await sqlite.close();
-});
+afterEach(() => sqlite.close());
 
 describe("SQLiteWrapper", () => {
 	test("create table", async () => {
@@ -94,5 +92,31 @@ describe("SQLiteWrapper", () => {
 		await sqlite.exec("UPDATE users SET name = 'Charlie' WHERE id = ?", [1]);
 		const updatedRows = await sqlite.query("SELECT * FROM users WHERE id = ?", [1]);
 		assert.deepEqual(updatedRows, [{ id: 1, name: "Charlie" }]);
+	});
+});
+
+describe("Error handling", () => {
+	test("If sqlite executable file is not found", async () => {
+		const sqlite = new SQLiteWrapper("/path/to/nonexistent/sqlite3");
+
+		await assert.rejects(
+			async () => {
+				await sqlite.exec(
+					outdent`
+						CREATE TABLE IF NOT EXISTS users (
+							id INTEGER PRIMARY KEY AUTOINCREMENT,
+							name TEXT
+						);
+
+						INSERT INTO users (name) VALUES (?);
+						INSERT INTO users (name) VALUES (?);
+					`,
+					["Alice", "Bob"]
+				);
+			},
+			{
+				message: /sqlite3 process error: spawn \/path\/to\/nonexistent\/sqlite3 ENOENT/,
+			}
+		);
 	});
 });
