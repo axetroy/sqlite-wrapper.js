@@ -82,6 +82,9 @@ export class SQLiteWrapper {
 	}
 
 	close() {
+		// Clear buffers to prevent memory leaks
+		this.#stdoutLines = [];
+		this.#stderrBuffer = "";
 		this.#closed = true;
 		this.#rl?.close();
 		this.#proc?.stdin?.end();
@@ -156,10 +159,6 @@ export class SQLiteWrapper {
 	}
 
 	#handleFatalError(error) {
-		// Clear buffers to prevent memory leaks
-		this.#stdoutLines = [];
-		this.#stderrBuffer = "";
-		
 		this.close();
 		if (this.#current) {
 			this.#current.reject(new Error("sqlite3 process error: " + error.message, { cause: error }));
