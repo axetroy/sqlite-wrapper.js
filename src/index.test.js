@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import os from "node:os";
 import test, { afterEach, beforeEach, describe } from "node:test";
 
 import outdent from "outdent";
@@ -27,9 +28,7 @@ beforeEach(async () => {
 	sqlite = new SQLiteWrapper(SQLite3BinaryFile);
 });
 
-afterEach(async () => {
-	await sqlite.close();
-});
+afterEach(() => sqlite.close());
 
 describe("SQLiteWrapper", () => {
 	test("create table", async () => {
@@ -94,5 +93,46 @@ describe("SQLiteWrapper", () => {
 		await sqlite.exec("UPDATE users SET name = 'Charlie' WHERE id = ?", [1]);
 		const updatedRows = await sqlite.query("SELECT * FROM users WHERE id = ?", [1]);
 		assert.deepEqual(updatedRows, [{ id: 1, name: "Charlie" }]);
+	});
+
+	test("rejects when sqlite binary is missing", async () => {
+		const missingPath = path.join(os.tmpdir(), "missing-sqlite3-binary");
+		const wrapper = new SQLiteWrapper(missingPath);
+
+		// Allow spawn error handler to mark the wrapper as closed
+		await new Promise((resolve) => setImmediate(resolve));
+
+		await assert.rejects(wrapper.exec("SELECT 1;"), /closed SQLiteWrapper/);
+		wrapper.close();
+	});
+});
+
+describe("Error handling", () => {
+	test("If sqlite executable file is not found", async () => {
+		const sqlite = new SQLiteWrapper("/path/to/nonexistent/sqlite3");
+
+		await assert
+			.rejects(
+				async () => {
+					await sqlite.exec(
+						outdent`
+						CREATE TABLE IF NOT EXISTS users (
+							id INTEGER PRIMARY KEY AUTOINCREMENT,
+							name TEXT
+						);
+
+						INSERT INTO users (name) VALUES (?);
+						INSERT INTO users (name) VALUES (?);
+					`,
+						["Alice", "Bob"]
+					);
+				},
+				{
+					message: /sqlite3 process error: spawn \/path\/to\/nonexistent\/sqlite3 ENOENT/,
+				}
+			)
+			.finally(() => {
+				sqlite.close();
+			});
 	});
 });

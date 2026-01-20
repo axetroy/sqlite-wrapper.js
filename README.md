@@ -270,6 +270,16 @@ Unlike other SQLite libraries for Node.js that require native bindings (like `be
 - **Simple deployment** - No need to worry about native dependencies in Docker/CI environments
 - **Lightweight** - Zero npm dependencies
 
+## Benchmarks
+
+The library includes comprehensive benchmarks to measure performance. Run them with:
+
+```bash
+npm run benchmark
+```
+
+This will test various operations including table creation, inserts, queries, updates, deletes, and JOIN operations. See the [benchmark directory](./benchmark/README.md) for more details.
+
 ## License
 
 The [Anti 996 License](LICENSE)
