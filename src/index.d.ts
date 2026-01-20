@@ -55,5 +55,5 @@ export declare class SQLiteWrapper {
 	/**
 	 * Closes the SQLite connection (Process).
 	 */
-	close(): Promise<void>;
+	close(): void;
 }
