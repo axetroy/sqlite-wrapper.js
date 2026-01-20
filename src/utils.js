@@ -19,7 +19,7 @@ export function escapeValue(value) {
  * @returns {string}
  */
 export function interpolateSQL(sql, params) {
-	// Fast path: if no parameters, return as-is
+	// Fast path: no parameters means no replacement needed
 	if (params.length === 0) return sql;
 	
 	let i = 0;

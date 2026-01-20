@@ -40,7 +40,7 @@ export class SQLiteWrapper {
 
 		this.#proc.stderr.on("data", (chunk) => {
 			const newData = chunk.toString();
-			// Limit stderr buffer to prevent memory issues (max 1MB)
+			// Prevent unbounded memory growth (max 1MB stderr)
 			if (this.#stderrBuffer.length + newData.length > 1048576) {
 				this.#stderrBuffer = this.#stderrBuffer.slice(-524288) + newData;
 			} else {
@@ -112,7 +112,7 @@ export class SQLiteWrapper {
 		this.#current = this.#queue.shift();
 
 		const { sql, isRaw } = this.#current;
-		// Optimize: reduce string operations by checking for semicolon first
+		// Optimize: avoid regex by checking for semicolon first
 		const statement = isRaw ? sql : (sql.endsWith(";") ? sql : sql.trimEnd() + ";");
 
 		this.#logger?.debug?.("Executing SQL:", statement);
@@ -123,7 +123,8 @@ export class SQLiteWrapper {
 		if (END_MARKERS.has(line)) {
 			this.#finalizeCurrent();
 		} else {
-			// Limit stdout buffer to prevent memory issues (max 10000 lines)
+			// Collect lines in array for efficient joining (avoid O(n²) string concat)
+			// Limit to 10000 lines to prevent unbounded memory growth
 			if (this.#stdoutLines.length >= 10000) {
 				this.#stdoutLines.shift();
 			}
