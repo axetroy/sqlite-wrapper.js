@@ -131,7 +131,11 @@ export class SQLiteWrapper {
 		const { resolve, reject } = this.#current;
 		this.#current = null;
 
-		error ? reject(new Error(error)) : resolve(result);
+		if (error) {
+			reject(new Error(error));
+		} else {
+			resolve(result);
+		}
 		this.#maybeProcessNext();
 	}
 
