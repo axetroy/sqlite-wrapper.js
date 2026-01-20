@@ -17,6 +17,12 @@ if (fs.existsSync(dbPath)) {
 	fs.unlinkSync(dbPath);
 }
 
+// Benchmark configuration constants
+const PRODUCT_COUNT = 1000;
+const CUSTOMER_COUNT = 100;
+const ORDER_COUNT = 1000;
+const TEMP_DATA_COUNT = 5000;
+
 /**
  * Get SQLite3 path, trying downloaded binary first, then system sqlite3
  * @returns {Promise<string>}
@@ -33,8 +39,22 @@ async function getSqlite3Path() {
 		// Download failed, will use system sqlite3
 	}
 	
-	// Fallback to system sqlite3
-	return "/usr/bin/sqlite3";
+	// Fallback to system sqlite3 - try common locations
+	const systemPaths = ["/usr/bin/sqlite3", "/usr/local/bin/sqlite3", "sqlite3"];
+	
+	for (const sqlitePath of systemPaths) {
+		try {
+			// Check if the path exists or if it's available in PATH
+			if (fs.existsSync(sqlitePath)) {
+				return sqlitePath;
+			}
+		} catch (error) {
+			// Continue to next path
+		}
+	}
+	
+	// If none found, return 'sqlite3' and let it fail with helpful error
+	return "sqlite3";
 }
 
 /**
@@ -163,13 +183,15 @@ async function main() {
 	{
 		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
 		await sqlite.exec("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL)");
-		// Insert test data
-		for (let i = 0; i < 1000; i++) {
+		// Insert test data with transaction for efficiency
+		await sqlite.exec("BEGIN TRANSACTION");
+		for (let i = 0; i < PRODUCT_COUNT; i++) {
 			await sqlite.exec("INSERT INTO products (name, price) VALUES (?, ?)", [`Product ${i}`, Math.random() * 100]);
 		}
+		await sqlite.exec("COMMIT");
 		results.push(
 			await benchmark(
-				"Simple SELECT (1000 rows)",
+				`Simple SELECT (${PRODUCT_COUNT} rows)`,
 				async () => {
 					await sqlite.query("SELECT * FROM products");
 				},
@@ -201,7 +223,7 @@ async function main() {
 			await benchmark(
 				"UPDATE Single Row",
 				async () => {
-					const id = Math.floor(Math.random() * 1000) + 1; // Random ID from 1-1000
+					const id = Math.floor(Math.random() * PRODUCT_COUNT) + 1;
 					await sqlite.exec("UPDATE products SET price = ? WHERE id = ?", [99.99, id]);
 				},
 				500
@@ -214,10 +236,12 @@ async function main() {
 	{
 		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
 		await sqlite.exec("CREATE TABLE IF NOT EXISTS temp_data (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT)");
-		// Pre-populate with data
-		for (let i = 0; i < 5000; i++) {
+		// Pre-populate with data using transaction
+		await sqlite.exec("BEGIN TRANSACTION");
+		for (let i = 0; i < TEMP_DATA_COUNT; i++) {
 			await sqlite.exec("INSERT INTO temp_data (data) VALUES (?)", [`data_${i}`]);
 		}
+		await sqlite.exec("COMMIT");
 		let deleteId = 1;
 		results.push(
 			await benchmark(
@@ -247,16 +271,25 @@ async function main() {
 				name TEXT
 			)
 		`);
-		// Insert test data
-		for (let i = 0; i < 100; i++) {
+		// Insert test data with transactions for efficiency
+		await sqlite.exec("BEGIN TRANSACTION");
+		for (let i = 0; i < CUSTOMER_COUNT; i++) {
 			await sqlite.exec("INSERT INTO customers (name) VALUES (?)", [`Customer ${i}`]);
 		}
-		for (let i = 0; i < 1000; i++) {
-			await sqlite.exec("INSERT INTO orders (user_id, total) VALUES (?, ?)", [Math.floor(Math.random() * 100) + 1, Math.random() * 1000]);
+		await sqlite.exec("COMMIT");
+		
+		await sqlite.exec("BEGIN TRANSACTION");
+		for (let i = 0; i < ORDER_COUNT; i++) {
+			await sqlite.exec("INSERT INTO orders (user_id, total) VALUES (?, ?)", [
+				Math.floor(Math.random() * CUSTOMER_COUNT) + 1,
+				Math.random() * 1000,
+			]);
 		}
+		await sqlite.exec("COMMIT");
+		
 		results.push(
 			await benchmark(
-				"JOIN Query (1000 orders, 100 customers)",
+				`JOIN Query (${ORDER_COUNT} orders, ${CUSTOMER_COUNT} customers)`,
 				async () => {
 					await sqlite.query("SELECT orders.*, customers.name FROM orders JOIN customers ON orders.user_id = customers.id");
 				},
