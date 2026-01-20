@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import os from "node:os";
 import test, { afterEach, beforeEach, describe } from "node:test";
 
 import outdent from "outdent";
@@ -92,6 +93,17 @@ describe("SQLiteWrapper", () => {
 		await sqlite.exec("UPDATE users SET name = 'Charlie' WHERE id = ?", [1]);
 		const updatedRows = await sqlite.query("SELECT * FROM users WHERE id = ?", [1]);
 		assert.deepEqual(updatedRows, [{ id: 1, name: "Charlie" }]);
+	});
+
+	test("rejects when sqlite binary is missing", async () => {
+		const missingPath = path.join(os.tmpdir(), "missing-sqlite3-binary");
+		const wrapper = new SQLiteWrapper(missingPath);
+
+		// Allow spawn error handler to mark the wrapper as closed
+		await new Promise((resolve) => setImmediate(resolve));
+
+		await assert.rejects(wrapper.exec("SELECT 1;"), /closed SQLiteWrapper/);
+		wrapper.close();
 	});
 });
 
