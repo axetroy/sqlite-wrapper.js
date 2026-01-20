@@ -12,17 +12,17 @@ It uses the SQLite3 executable file for database operations and it's **zero-depe
 
 ## Features
 
-- 🚀 **Zero dependencies** - No native bindings required
-- 📦 **Uses SQLite3 CLI** - Works with the SQLite3 command-line executable
-- 🔒 **Automatic SQL escaping** - Built-in parameter escaping to prevent SQL injection
-- 📝 **TypeScript support** - Full TypeScript type definitions included
-- 🔄 **Promise-based API** - Modern async/await interface
-- 📦 **Dual module support** - Works with both ESM and CommonJS
+-   🚀 **Zero dependencies** - No native bindings required
+-   📦 **Uses SQLite3 CLI** - Works with the SQLite3 command-line executable
+-   🔒 **Automatic SQL escaping** - Built-in parameter escaping to prevent SQL injection
+-   📝 **TypeScript support** - Full TypeScript type definitions included
+-   🔄 **Promise-based API** - Modern async/await interface
+-   📦 **Dual module support** - Works with both ESM and CommonJS
 
 ## Requirements
 
-- Node.js >= 18 (tested on Node.js 22)
-- SQLite3 executable installed on your system
+-   Node.js >= 18 (tested on Node.js 22)
+-   SQLite3 executable installed on your system
 
 ## Installation
 
@@ -76,11 +76,11 @@ The main class for interacting with SQLite databases.
 new SQLiteWrapper(exePath, options?)
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `exePath` | `string` | Path to the SQLite3 executable |
+| Parameter        | Type     | Description                                                                                 |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------- |
+| `exePath`        | `string` | Path to the SQLite3 executable                                                              |
 | `options.dbPath` | `string` | (Optional) Path to the SQLite database file. If not provided, an in-memory database is used |
-| `options.logger` | `Logger` | (Optional) Logger instance for debugging |
+| `options.logger` | `Logger` | (Optional) Logger instance for debugging                                                    |
 
 #### Methods
 
@@ -93,10 +93,10 @@ await sqlite.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
 await sqlite.exec("INSERT INTO users (name) VALUES (?)", ["Alice"]);
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `sql` | `string` | SQL statement to execute |
-| `params` | `any[]` | (Optional) Parameters to substitute for `?` placeholders |
+| Parameter | Type     | Description                                              |
+| --------- | -------- | -------------------------------------------------------- |
+| `sql`     | `string` | SQL statement to execute                                 |
+| `params`  | `any[]`  | (Optional) Parameters to substitute for `?` placeholders |
 
 ##### `query<T>(sql, params?)`
 
@@ -107,11 +107,11 @@ const users = await sqlite.query("SELECT * FROM users WHERE id = ?", [1]);
 // Returns: [{ id: 1, name: 'Alice' }]
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `sql` | `string` | SQL query to execute |
-| `params` | `any[]` | (Optional) Parameters to substitute for `?` placeholders |
-| **Returns** | `Promise<T[]>` | Array of result objects |
+| Parameter   | Type           | Description                                              |
+| ----------- | -------------- | -------------------------------------------------------- |
+| `sql`       | `string`       | SQL query to execute                                     |
+| `params`    | `any[]`        | (Optional) Parameters to substitute for `?` placeholders |
+| **Returns** | `Promise<T[]>` | Array of result objects                                  |
 
 ##### `close()`
 
@@ -130,12 +130,12 @@ Escapes a single value for safe use in SQL queries.
 ```js
 import { escapeValue } from "sqlite-wrapper.js";
 
-escapeValue("Alice");      // "'Alice'"
-escapeValue("O'Brien");    // "'O''Brien'"
-escapeValue(42);           // "42"
-escapeValue(null);         // "NULL"
-escapeValue(true);         // "TRUE"
-escapeValue(new Date());   // "'2024-01-15T10:30:00.000Z'" (ISO 8601 format)
+escapeValue("Alice"); // "'Alice'"
+escapeValue("O'Brien"); // "'O''Brien'"
+escapeValue(42); // "42"
+escapeValue(null); // "NULL"
+escapeValue(true); // "TRUE"
+escapeValue(new Date()); // "'2024-01-15T10:30:00.000Z'" (ISO 8601 format)
 ```
 
 #### `interpolateSQL(sql, params)`
@@ -153,14 +153,14 @@ const sql = interpolateSQL("SELECT * FROM users WHERE name = ? AND age = ?", ["A
 
 The following types are supported for SQL parameters:
 
-| Type | SQL Output |
-|------|------------|
-| `string` | `'value'` (with proper escaping) |
-| `number` | `123` |
-| `bigint` | `123` |
-| `boolean` | `TRUE` or `FALSE` |
-| `null` / `undefined` | `NULL` |
-| `Date` | `'YYYY-MM-DDTHH:mm:ss.sssZ'` (ISO 8601) |
+| Type                 | SQL Output                              |
+| -------------------- | --------------------------------------- |
+| `string`             | `'value'` (with proper escaping)        |
+| `number`             | `123`                                   |
+| `bigint`             | `123`                                   |
+| `boolean`            | `TRUE` or `FALSE`                       |
+| `null` / `undefined` | `NULL`                                  |
+| `Date`               | `'YYYY-MM-DDTHH:mm:ss.sssZ'` (ISO 8601) |
 
 ## Usage Examples
 
@@ -185,16 +185,16 @@ await sqlite.close();
 import { SQLiteWrapper } from "sqlite-wrapper.js";
 
 const logger = {
-  log: console.log,
-  info: console.info,
-  warn: console.warn,
-  error: console.error,
-  debug: console.debug,
+	log: console.log,
+	info: console.info,
+	warn: console.warn,
+	error: console.error,
+	debug: console.debug,
 };
 
 const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", {
-  dbPath: "./mydb.sqlite",
-  logger: logger,
+	dbPath: "./mydb.sqlite",
+	logger: logger,
 });
 ```
 
@@ -204,9 +204,9 @@ const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", {
 import { SQLiteWrapper } from "sqlite-wrapper.js";
 
 interface User {
-  id: number;
-  name: string;
-  email: string;
+	id: number;
+	name: string;
+	email: string;
 }
 
 const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", { dbPath: "./users.db" });
@@ -248,7 +248,8 @@ import { SQLiteWrapper } from "sqlite-wrapper.js";
 const sqlite = new SQLiteWrapper("/usr/bin/sqlite3");
 
 // The first ? is replaced with "Alice", the second ? with "Bob"
-await sqlite.exec(`
+await sqlite.exec(
+	`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT
@@ -256,7 +257,9 @@ await sqlite.exec(`
 
   INSERT INTO users (name) VALUES (?);
   INSERT INTO users (name) VALUES (?);
-`, ["Alice", "Bob"]);
+`,
+	["Alice", "Bob"]
+);
 
 await sqlite.close();
 ```
@@ -265,10 +268,10 @@ await sqlite.close();
 
 Unlike other SQLite libraries for Node.js that require native bindings (like `better-sqlite3` or `sqlite3`), this library:
 
-- **No compilation required** - Works immediately without building native modules
-- **Cross-platform** - Works anywhere SQLite3 CLI is available
-- **Simple deployment** - No need to worry about native dependencies in Docker/CI environments
-- **Lightweight** - Zero npm dependencies
+-   **No compilation required** - Works immediately without building native modules
+-   **Cross-platform** - Works anywhere SQLite3 CLI is available
+-   **Simple deployment** - No need to worry about native dependencies in Docker/CI environments
+-   **Lightweight** - Zero npm dependencies
 
 ## Benchmarks
 
@@ -299,7 +302,9 @@ JOIN Query (1000 orders, 100 customers)       1.994      1.917      2.225     50
 Transaction (5 inserts)                       0.325      0.251      0.484    3078.36
 ================================================================================
 ```
+
 </summary>
+</details>
 
 ## License
 
