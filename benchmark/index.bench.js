@@ -29,7 +29,7 @@ const TEMP_DATA_COUNT = 5000;
  */
 async function getSqlite3Path() {
 	const downloadedPath = path.join(root, "bin", "sqlite3");
-	
+
 	try {
 		await downloadSQLite3();
 		if (fs.existsSync(downloadedPath)) {
@@ -37,11 +37,12 @@ async function getSqlite3Path() {
 		}
 	} catch (error) {
 		// Download failed, will use system sqlite3
+		console.error("Failed to download SQLite3 binary, falling back to system sqlite3:", error);
 	}
-	
+
 	// Fallback to system sqlite3 - try common locations
 	const systemPaths = ["/usr/bin/sqlite3", "/usr/local/bin/sqlite3", "sqlite3"];
-	
+
 	for (const sqlitePath of systemPaths) {
 		try {
 			// Check if the path exists or if it's available in PATH
@@ -50,9 +51,10 @@ async function getSqlite3Path() {
 			}
 		} catch (error) {
 			// Continue to next path
+			console.error(`SQLite3 not found at ${sqlitePath}:`, error);
 		}
 	}
-	
+
 	// If none found, return 'sqlite3' and let it fail with helpful error
 	return "sqlite3";
 }
@@ -105,13 +107,17 @@ function displayResults(results) {
 	console.log("SQLite Wrapper Benchmark Results");
 	console.log("=".repeat(80));
 	console.log(
-		`${"Benchmark".padEnd(40)} ${"Avg (ms)".padStart(10)} ${"Min (ms)".padStart(10)} ${"Max (ms)".padStart(10)} ${"Ops/sec".padStart(10)}`
+		`${"Benchmark".padEnd(40)} ${"Avg (ms)".padStart(10)} ${"Min (ms)".padStart(10)} ${"Max (ms)".padStart(10)} ${"Ops/sec".padStart(
+			10
+		)}`
 	);
 	console.log("-".repeat(80));
 
 	for (const result of results) {
 		console.log(
-			`${result.name.padEnd(40)} ${result.avgTime.padStart(10)} ${result.minTime.padStart(10)} ${result.maxTime.padStart(10)} ${result.opsPerSecond.padStart(10)}`
+			`${result.name.padEnd(40)} ${result.avgTime.padStart(10)} ${result.minTime.padStart(10)} ${result.maxTime.padStart(
+				10
+			)} ${result.opsPerSecond.padStart(10)}`
 		);
 	}
 
@@ -277,7 +283,7 @@ async function main() {
 			await sqlite.exec("INSERT INTO customers (name) VALUES (?)", [`Customer ${i}`]);
 		}
 		await sqlite.exec("COMMIT");
-		
+
 		await sqlite.exec("BEGIN TRANSACTION");
 		for (let i = 0; i < ORDER_COUNT; i++) {
 			await sqlite.exec("INSERT INTO orders (user_id, total) VALUES (?, ?)", [
@@ -286,7 +292,7 @@ async function main() {
 			]);
 		}
 		await sqlite.exec("COMMIT");
-		
+
 		results.push(
 			await benchmark(
 				`JOIN Query (${ORDER_COUNT} orders, ${CUSTOMER_COUNT} customers)`,
