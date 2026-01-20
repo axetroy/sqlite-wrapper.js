@@ -280,7 +280,7 @@ npm run benchmark
 
 This will test various operations including table creation, inserts, queries, updates, deletes, and JOIN operations. See the [benchmark directory](./benchmark/README.md) for more details.
 
-<details><summary>MacOS M3Pro Benchmark Results</summary>
+<details><summary>Apple M3 Pro Benchmark Results</summary>
 
 ```
 ================================================================================
