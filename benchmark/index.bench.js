@@ -28,8 +28,13 @@ const TEMP_DATA_COUNT = 5000;
  * @returns {Promise<string>}
  */
 async function getSqlite3Path() {
-	const downloadedPath = path.join(root, "bin", "sqlite3");
+	const downloadedPath = path.join(root, "bin", "sqlite3" + (process.platform === "win32" ? ".exe" : ""));
 
+	if (fs.existsSync(downloadedPath)) {
+		return downloadedPath;
+	}
+
+	// Try to download SQLite3 binary
 	try {
 		await downloadSQLite3();
 		if (fs.existsSync(downloadedPath)) {
@@ -40,23 +45,8 @@ async function getSqlite3Path() {
 		console.error("Failed to download SQLite3 binary, falling back to system sqlite3:", error);
 	}
 
-	// Fallback to system sqlite3 - try common locations
-	const systemPaths = ["/usr/bin/sqlite3", "/usr/local/bin/sqlite3", "sqlite3"];
-
-	for (const sqlitePath of systemPaths) {
-		try {
-			// Check if the path exists or if it's available in PATH
-			if (fs.existsSync(sqlitePath)) {
-				return sqlitePath;
-			}
-		} catch (error) {
-			// Continue to next path
-			console.error(`SQLite3 not found at ${sqlitePath}:`, error);
-		}
-	}
-
-	// If none found, return 'sqlite3' and let it fail with helpful error
-	return "sqlite3";
+	// If none found, fall back to system sqlite3
+	return "sqlite3" + (process.platform === "win32" ? ".exe" : "");
 }
 
 /**
