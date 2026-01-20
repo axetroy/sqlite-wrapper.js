@@ -81,7 +81,7 @@ export class SQLiteWrapper {
 		}
 	}
 
-	async close() {
+	close() {
 		this.#closed = true;
 		this.#rl?.close();
 		this.#proc?.stdin?.end();
@@ -92,6 +92,8 @@ export class SQLiteWrapper {
 	// 队列系统
 	// ----------------------------
 	#enqueueSQL(sql, params) {
+		if (this.#closed) return Promise.reject(new Error("Cannot enqueue SQL on closed SQLiteWrapper"));
+
 		const formatted = interpolateSQL(sql, params);
 
 		return new Promise((resolve, reject) => {
@@ -101,6 +103,8 @@ export class SQLiteWrapper {
 	}
 
 	#enqueueCommand(command) {
+		if (this.#closed) return Promise.reject(new Error("Cannot enqueue command on closed SQLiteWrapper"));
+
 		return new Promise((resolve, reject) => {
 			this.#queue.push({ sql: command, resolve, reject, isRaw: true });
 			this.#maybeProcessNext();
@@ -143,16 +147,20 @@ export class SQLiteWrapper {
 		const { resolve, reject } = this.#current;
 		this.#current = null;
 
-		error ? reject(new Error(error)) : resolve(result);
+		if (error) {
+			reject(new Error(error));
+		} else {
+			resolve(result);
+		}
 		this.#maybeProcessNext();
 	}
 
 	#handleFatalError(error) {
-		this.#closed = true;
 		// Clear buffers to prevent memory leaks
 		this.#stdoutLines = [];
 		this.#stderrBuffer = "";
 		
+		this.close();
 		if (this.#current) {
 			this.#current.reject(new Error("sqlite3 process error: " + error.message, { cause: error }));
 			this.#current = null;
