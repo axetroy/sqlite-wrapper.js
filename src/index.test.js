@@ -99,10 +99,11 @@ describe("Error handling", () => {
 	test("If sqlite executable file is not found", async () => {
 		const sqlite = new SQLiteWrapper("/path/to/nonexistent/sqlite3");
 
-		await assert.rejects(
-			async () => {
-				await sqlite.exec(
-					outdent`
+		await assert
+			.rejects(
+				async () => {
+					await sqlite.exec(
+						outdent`
 						CREATE TABLE IF NOT EXISTS users (
 							id INTEGER PRIMARY KEY AUTOINCREMENT,
 							name TEXT
@@ -111,12 +112,15 @@ describe("Error handling", () => {
 						INSERT INTO users (name) VALUES (?);
 						INSERT INTO users (name) VALUES (?);
 					`,
-					["Alice", "Bob"]
-				);
-			},
-			{
-				message: /sqlite3 process error: spawn \/path\/to\/nonexistent\/sqlite3 ENOENT/,
-			}
-		);
+						["Alice", "Bob"]
+					);
+				},
+				{
+					message: /sqlite3 process error: spawn \/path\/to\/nonexistent\/sqlite3 ENOENT/,
+				}
+			)
+			.finally(() => {
+				sqlite.close();
+			});
 	});
 });
