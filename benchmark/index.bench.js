@@ -4,16 +4,37 @@ import path from "node:path";
 import fs from "node:fs";
 
 import { SQLiteWrapper } from "../src/index.js";
+import downloadSQLite3 from "../script/download-sqlite3.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const sqlite3Path = "/usr/bin/sqlite3";
+const root = path.join(__dirname, "..");
 const dbPath = path.join(__dirname, "benchmark.db");
 
 // Clean up database before starting
 if (fs.existsSync(dbPath)) {
 	fs.unlinkSync(dbPath);
+}
+
+/**
+ * Get SQLite3 path, trying downloaded binary first, then system sqlite3
+ * @returns {Promise<string>}
+ */
+async function getSqlite3Path() {
+	const downloadedPath = path.join(root, "bin", "sqlite3");
+	
+	try {
+		await downloadSQLite3();
+		if (fs.existsSync(downloadedPath)) {
+			return downloadedPath;
+		}
+	} catch (error) {
+		// Download failed, will use system sqlite3
+	}
+	
+	// Fallback to system sqlite3
+	return "/usr/bin/sqlite3";
 }
 
 /**
@@ -78,6 +99,10 @@ function displayResults(results) {
 }
 
 async function main() {
+	// Get SQLite3 path (downloaded or system)
+	const sqlite3Path = await getSqlite3Path();
+	console.log(`Using SQLite3 at: ${sqlite3Path}\n`);
+
 	const results = [];
 
 	console.log("Starting benchmarks...\n");
@@ -114,17 +139,19 @@ async function main() {
 		await sqlite.close();
 	}
 
-	// Benchmark 3: Bulk insert
+	// Benchmark 3: Bulk insert (with transaction)
 	{
 		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
 		await sqlite.exec("CREATE TABLE IF NOT EXISTS bulk_test (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)");
 		results.push(
 			await benchmark(
-				"Bulk Insert (100 rows)",
+				"Bulk Insert (100 rows with transaction)",
 				async () => {
+					await sqlite.exec("BEGIN TRANSACTION");
 					for (let i = 0; i < 100; i++) {
 						await sqlite.exec("INSERT INTO bulk_test (value) VALUES (?)", [`value_${i}`]);
 					}
+					await sqlite.exec("COMMIT");
 				},
 				10
 			)
@@ -170,12 +197,12 @@ async function main() {
 	// Benchmark 6: UPDATE operation
 	{
 		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		let id = 1;
 		results.push(
 			await benchmark(
 				"UPDATE Single Row",
 				async () => {
-					await sqlite.exec("UPDATE products SET price = ? WHERE id = ?", [99.99, id++]);
+					const id = Math.floor(Math.random() * 1000) + 1; // Random ID from 1-1000
+					await sqlite.exec("UPDATE products SET price = ? WHERE id = ?", [99.99, id]);
 				},
 				500
 			)
