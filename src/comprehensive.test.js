@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import test, { afterEach, beforeEach, describe } from "node:test";
+import outdent from "outdent";
 
 import { SQLiteWrapper } from "./index.js";
 
@@ -35,10 +36,7 @@ describe("SQLiteWrapper - Data Types", () => {
 		`);
 
 		const date = new Date("2024-01-15T10:30:00.000Z");
-		await sqlite.exec(
-			"INSERT INTO test_types VALUES (?, ?, ?, ?, ?, ?, ?)",
-			[1, "hello", 42, 3.14, true, null, date]
-		);
+		await sqlite.exec("INSERT INTO test_types VALUES (?, ?, ?, ?, ?, ?, ?)", [1, "hello", 42, 3.14, true, null, date]);
 
 		const rows = await sqlite.query("SELECT * FROM test_types");
 		assert.equal(rows.length, 1);
@@ -54,14 +52,7 @@ describe("SQLiteWrapper - Data Types", () => {
 	test("handles strings with special characters", async () => {
 		await sqlite.exec("CREATE TABLE test_strings (id INTEGER, value TEXT)");
 
-		const specialStrings = [
-			"O'Brien",
-			"It's a test",
-			'String with "quotes"',
-			"String\nwith\nnewlines",
-			"String\twith\ttabs",
-			"",
-		];
+		const specialStrings = ["O'Brien", "It's a test", 'String with "quotes"', "String\nwith\nnewlines", "String\twith\ttabs", ""];
 
 		for (let i = 0; i < specialStrings.length; i++) {
 			await sqlite.exec("INSERT INTO test_strings VALUES (?, ?)", [i, specialStrings[i]]);
@@ -120,12 +111,7 @@ describe("SQLiteWrapper - CRUD Operations", () => {
 	});
 
 	test("UPDATE operations", async () => {
-		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?)", [
-			"Alice",
-			25,
-			"Bob",
-			30,
-		]);
+		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?)", ["Alice", 25, "Bob", 30]);
 
 		await sqlite.exec("UPDATE users SET age = ? WHERE name = ?", [26, "Alice"]);
 
@@ -134,14 +120,7 @@ describe("SQLiteWrapper - CRUD Operations", () => {
 	});
 
 	test("DELETE operations", async () => {
-		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?), (?, ?)", [
-			"Alice",
-			25,
-			"Bob",
-			30,
-			"Charlie",
-			35,
-		]);
+		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?), (?, ?)", ["Alice", 25, "Bob", 30, "Charlie", 35]);
 
 		await sqlite.exec("DELETE FROM users WHERE name = ?", ["Bob"]);
 
@@ -161,14 +140,7 @@ describe("SQLiteWrapper - CRUD Operations", () => {
 	});
 
 	test("SELECT with WHERE clause", async () => {
-		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?), (?, ?)", [
-			"Alice",
-			25,
-			"Bob",
-			30,
-			"Charlie",
-			35,
-		]);
+		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?), (?, ?)", ["Alice", 25, "Bob", 30, "Charlie", 35]);
 
 		const rows = await sqlite.query("SELECT * FROM users WHERE age > ?", [27]);
 		assert.equal(rows.length, 2);
@@ -177,14 +149,7 @@ describe("SQLiteWrapper - CRUD Operations", () => {
 	});
 
 	test("SELECT with ORDER BY", async () => {
-		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?), (?, ?)", [
-			"Charlie",
-			35,
-			"Alice",
-			25,
-			"Bob",
-			30,
-		]);
+		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?), (?, ?)", ["Charlie", 35, "Alice", 25, "Bob", 30]);
 
 		const rows = await sqlite.query("SELECT * FROM users ORDER BY age ASC");
 		assert.equal(rows[0].name, "Alice");
@@ -193,14 +158,7 @@ describe("SQLiteWrapper - CRUD Operations", () => {
 	});
 
 	test("SELECT with LIMIT", async () => {
-		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?), (?, ?)", [
-			"Alice",
-			25,
-			"Bob",
-			30,
-			"Charlie",
-			35,
-		]);
+		await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?), (?, ?), (?, ?)", ["Alice", 25, "Bob", 30, "Charlie", 35]);
 
 		const rows = await sqlite.query("SELECT * FROM users LIMIT ?", [2]);
 		assert.equal(rows.length, 2);
@@ -303,6 +261,34 @@ describe("SQLiteWrapper - Error Handling", () => {
 		await assert.rejects(async () => {
 			await tempSqlite.exec("CREATE TABLE test (id INTEGER)");
 		}, /closed SQLiteWrapper/);
+	});
+
+	test("reject on missing sqlite executable file", async () => {
+		const sqlite = new SQLiteWrapper("/path/to/nonexistent/sqlite3");
+
+		await assert
+			.rejects(
+				async () => {
+					await sqlite.exec(
+						outdent`
+						CREATE TABLE IF NOT EXISTS users (
+							id INTEGER PRIMARY KEY AUTOINCREMENT,
+							name TEXT
+						);
+
+						INSERT INTO users (name) VALUES (?);
+						INSERT INTO users (name) VALUES (?);
+					`,
+						["Alice", "Bob"]
+					);
+				},
+				{
+					message: /sqlite3 process error: spawn \/path\/to\/nonexistent\/sqlite3 ENOENT/,
+				}
+			)
+			.finally(() => {
+				sqlite.close();
+			});
 	});
 });
 
@@ -420,12 +406,7 @@ describe("SQLiteWrapper - Complex Queries", () => {
 			)
 		`);
 
-		await sqlite.exec("INSERT INTO customers VALUES (1, ?, ?), (2, ?, ?)", [
-			"Alice",
-			"alice@example.com",
-			"Bob",
-			"bob@example.com",
-		]);
+		await sqlite.exec("INSERT INTO customers VALUES (1, ?, ?), (2, ?, ?)", ["Alice", "alice@example.com", "Bob", "bob@example.com"]);
 
 		await sqlite.exec("INSERT INTO orders VALUES (1, ?, ?, ?), (2, ?, ?, ?), (3, ?, ?, ?)", [
 			1,
@@ -441,12 +422,15 @@ describe("SQLiteWrapper - Complex Queries", () => {
 	});
 
 	test("handles JOIN queries", async () => {
-		const rows = await sqlite.query(`
+		const rows = await sqlite.query(
+			`
 			SELECT customers.name, orders.product, orders.amount
 			FROM customers
 			JOIN orders ON customers.id = orders.customer_id
 			WHERE customers.id = ?
-		`, [1]);
+		`,
+			[1]
+		);
 
 		assert.equal(rows.length, 2);
 		assert.equal(rows[0].name, "Alice");
@@ -466,10 +450,13 @@ describe("SQLiteWrapper - Complex Queries", () => {
 	});
 
 	test("handles subqueries", async () => {
-		const rows = await sqlite.query(`
+		const rows = await sqlite.query(
+			`
 			SELECT name FROM customers
 			WHERE id IN (SELECT customer_id FROM orders WHERE amount > ?)
-		`, [25]);
+		`,
+			[25]
+		);
 
 		assert.equal(rows.length, 2);
 	});

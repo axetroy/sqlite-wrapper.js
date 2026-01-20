@@ -99,6 +99,7 @@ async function main() {
 if (fileURLToPath(import.meta.url) === process.argv[1]) {
 	// Execute the main function
 	main().catch((error) => {
+		console.error("Error downloading SQLite3:");
 		console.error(error);
 		process.exit(1);
 	});
