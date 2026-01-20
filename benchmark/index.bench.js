@@ -299,17 +299,19 @@ async function main() {
 		await sqlite.close();
 	}
 
-	// Benchmark 9: Transaction simulation (multiple operations)
+	// Benchmark 9: Transaction with multiple operations
 	{
 		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
 		await sqlite.exec("CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL)");
 		results.push(
 			await benchmark(
-				"Transaction Simulation (5 inserts)",
+				"Transaction (5 inserts)",
 				async () => {
+					await sqlite.exec("BEGIN TRANSACTION");
 					for (let i = 0; i < 5; i++) {
 						await sqlite.exec("INSERT INTO transactions (amount) VALUES (?)", [Math.random() * 100]);
 					}
+					await sqlite.exec("COMMIT");
 				},
 				100
 			)
