@@ -91,7 +91,24 @@ export class SQLiteWrapper {
 		const formatted = interpolateSQL(sql, params);
 
 		return new Promise((resolve, reject) => {
-			this.#queue.push({ sql: formatted, resolve, reject, isRaw: false });
+			const startTime = Date.now();
+			const end = () => {
+				this.#logger?.debug?.("SQL execution completed in ", Date.now() - startTime, "ms");
+			};
+
+			this.#queue.push({
+				sql: formatted,
+				resolve: (...args) => {
+					end();
+					resolve(...args);
+				},
+				reject: (...args) => {
+					end();
+					reject(...args);
+				},
+				isRaw: false,
+				start: Date.now(),
+			});
 			this.#maybeProcessNext();
 		});
 	}
