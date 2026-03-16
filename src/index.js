@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import readline from "node:readline";
 import { EOL } from "node:os";
 import { END_SIGNAL, END_MARKERS } from "./constants.js";
 import { Queue } from "./queue.js";
@@ -11,9 +10,9 @@ export class SQLiteWrapper {
 	#current = null;
 	#closed = false;
 	#stdoutBuffer = [];
+	#stdoutChunkRemainder = "";
 	#stderrBuffer = [];
 	#proc;
-	#rl;
 	#logger;
 
 	constructor(sqlite3ExePath, { dbPath, logger } = {}) {
@@ -33,7 +32,6 @@ export class SQLiteWrapper {
 		this.#proc.stdin.setDefaultEncoding("utf-8");
 
 		this.#bindProcessEvents();
-		this.#setupStdoutReader();
 	}
 
 	#bindProcessEvents() {
@@ -46,15 +44,14 @@ export class SQLiteWrapper {
 			this.#stderrBuffer.push(chunk.toString());
 		});
 
+		this.#proc.stdout.on("data", (chunk) => {
+			this.#handleStdoutChunk(chunk.toString());
+		});
+
 		this.#proc.on("close", () => {
 			if (this.#closed) return;
 			this.#handleFatalError(new Error("sqlite3 process closed unexpectedly"));
 		});
-	}
-
-	#setupStdoutReader() {
-		this.#rl = readline.createInterface({ input: this.#proc.stdout, terminal: false });
-		this.#rl.on("line", (line) => this.#handleLine(line.trim()));
 	}
 
 	// ----------------------------
@@ -79,7 +76,6 @@ export class SQLiteWrapper {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#rejectPending(new Error("SQLiteWrapper is closed"));
-		this.#rl?.close();
 		this.#proc?.stdin?.end();
 		this.#proc?.kill();
 	}
@@ -137,6 +133,22 @@ export class SQLiteWrapper {
 		}
 	}
 
+	#handleStdoutChunk(chunk) {
+		this.#stdoutChunkRemainder += chunk;
+
+		let lineStart = 0;
+		for (let i = 0; i < this.#stdoutChunkRemainder.length; i++) {
+			if (this.#stdoutChunkRemainder[i] !== "\n") continue;
+
+			let line = this.#stdoutChunkRemainder.slice(lineStart, i);
+			if (line.endsWith("\r")) line = line.slice(0, -1);
+			this.#handleLine(line.trim());
+			lineStart = i + 1;
+		}
+
+		this.#stdoutChunkRemainder = this.#stdoutChunkRemainder.slice(lineStart);
+	}
+
 	#finalizeCurrent() {
 		const result = this.#stdoutBuffer.join(EOL).trim();
 		const error = this.#stderrBuffer.join("").trim();
@@ -168,6 +180,7 @@ export class SQLiteWrapper {
 		}
 
 		this.#stdoutBuffer = [];
+		this.#stdoutChunkRemainder = "";
 		this.#stderrBuffer = [];
 	}
 
@@ -176,7 +189,6 @@ export class SQLiteWrapper {
 
 		this.#closed = true;
 		this.#rejectPending(new Error("sqlite3 process error: " + error.message, { cause: error }));
-		this.#rl?.close();
 		this.#proc?.stdin?.end();
 		this.#proc?.kill();
 	}
