@@ -15,7 +15,6 @@ export class SQLiteWrapper {
 	#proc;
 	#rl;
 	#logger;
-	#modeIsSet = false;
 
 	constructor(sqlite3ExePath, { dbPath, logger } = {}) {
 		this.#logger = logger;
@@ -26,7 +25,11 @@ export class SQLiteWrapper {
 	// 进程初始化与事件绑定
 	// ----------------------------
 	#initProcess(sqlite3ExePath, dbPath) {
-		this.#proc = spawn(sqlite3ExePath, dbPath ? [dbPath] : [], { stdio: "pipe" });
+		const args = ["-cmd", ".mode json"];
+
+		if (dbPath) args.push(dbPath);
+
+		this.#proc = spawn(sqlite3ExePath, args, { stdio: "pipe" });
 		this.#proc.stdin.setDefaultEncoding("utf-8");
 
 		this.#bindProcessEvents();
@@ -62,11 +65,6 @@ export class SQLiteWrapper {
 	}
 
 	async query(sql, params = []) {
-		if (!this.#modeIsSet) {
-			await this.#enqueueCommand(".mode json");
-			this.#modeIsSet = true;
-		}
-
 		const raw = await this.#enqueueSQL(sql, params);
 		if (!raw.trim()) return [];
 
@@ -112,15 +110,6 @@ export class SQLiteWrapper {
 				},
 				isRaw: false
 			});
-			this.#maybeProcessNext();
-		});
-	}
-
-	#enqueueCommand(command) {
-		if (this.#closed) return Promise.reject(new Error("Cannot enqueue command on closed SQLiteWrapper"));
-
-		return new Promise((resolve, reject) => {
-			this.#queue.enqueue({ sql: command, resolve, reject, isRaw: true });
 			this.#maybeProcessNext();
 		});
 	}
