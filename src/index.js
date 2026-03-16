@@ -10,8 +10,8 @@ export class SQLiteWrapper {
 	#queue = new Queue();
 	#current = null;
 	#closed = false;
-	#stdoutBuffer = "";
-	#stderrBuffer = "";
+	#stdoutBuffer = [];
+	#stderrBuffer = [];
 	#proc;
 	#rl;
 	#logger;
@@ -40,7 +40,7 @@ export class SQLiteWrapper {
 		});
 
 		this.#proc.stderr.on("data", (chunk) => {
-			this.#stderrBuffer += chunk.toString();
+			this.#stderrBuffer.push(chunk.toString());
 		});
 
 		this.#proc.on("close", () => {
@@ -92,7 +92,7 @@ export class SQLiteWrapper {
 	#enqueueSQL(sql, params) {
 		if (this.#closed) return Promise.reject(new Error("Cannot enqueue SQL on closed SQLiteWrapper"));
 
-		const formatted = interpolateSQL(sql, params);
+		const formatted = params.length === 0 && !sql.includes("?") ? sql : interpolateSQL(sql, params);
 
 		return new Promise((resolve, reject) => {
 			const startTime = Date.now();
@@ -145,16 +145,16 @@ export class SQLiteWrapper {
 		if (END_MARKERS.has(line)) {
 			this.#finalizeCurrent();
 		} else {
-			this.#stdoutBuffer += line + EOL;
+			this.#stdoutBuffer.push(line);
 		}
 	}
 
 	#finalizeCurrent() {
-		const result = this.#stdoutBuffer.trim();
-		const error = this.#stderrBuffer.trim();
+		const result = this.#stdoutBuffer.join(EOL).trim();
+		const error = this.#stderrBuffer.join("").trim();
 
-		this.#stdoutBuffer = "";
-		this.#stderrBuffer = "";
+		this.#stdoutBuffer = [];
+		this.#stderrBuffer = [];
 
 		if (!this.#current) return;
 		const { resolve, reject } = this.#current;
@@ -179,8 +179,8 @@ export class SQLiteWrapper {
 			task.reject(error);
 		}
 
-		this.#stdoutBuffer = "";
-		this.#stderrBuffer = "";
+		this.#stdoutBuffer = [];
+		this.#stderrBuffer = [];
 	}
 
 	#handleFatalError(error) {

@@ -19,6 +19,11 @@ export function escapeValue(value) {
  * @returns {string}
  */
 export function interpolateSQL(sql, params) {
+	if (!sql.includes("?")) {
+		if (params.length > 0) throw new Error("Too many parameters provided");
+		return sql;
+	}
+
 	let i = 0;
 	let interpolated = "";
 	let state = "normal";
