@@ -291,15 +291,20 @@ SQLite Wrapper Benchmark Results
 ================================================================================
 Benchmark                                  Avg (ms)   Min (ms)   Max (ms)    Ops/sec
 --------------------------------------------------------------------------------
-Table Creation                                0.350      0.217      0.999    2856.10
-Single Row Insert                             0.261      0.184      2.337    3824.36
-Bulk Insert (100 rows with transaction)       1.884      1.639      2.526     530.90
-Simple SELECT (1000 rows)                     1.721      1.652      2.889     581.18
-SELECT with WHERE clause                      0.885      0.853      0.994    1130.04
-UPDATE Single Row                             0.214      0.019      0.670    4668.93
-DELETE Single Row                             0.274      0.175      0.560    3651.09
-JOIN Query (1000 orders, 100 customers)       1.994      1.917      2.225     501.44
-Transaction (5 inserts)                       0.325      0.251      0.484    3078.36
+Table Creation                                0.349      0.218      0.877    2868.39
+Single Row Insert                             0.305      0.231      0.922    3279.51
+Bulk Insert (100 rows with transaction)       2.014      1.633      2.669     496.57
+Simple SELECT (1000 rows)                     1.749      1.646      1.981     571.65
+SELECT with WHERE clause                      0.964      0.933      1.638    1037.53
+UPDATE Single Row                             0.216      0.018      0.902    4629.84
+DELETE Single Row                             0.369      0.169      6.048    2708.77
+JOIN Query (1000 orders, 100 customers)       2.111      2.040      2.297     473.62
+Transaction (5 inserts)                       0.395      0.329      0.590    2531.67
+100k Point Query by ID (100000 rows)          0.027      0.017      0.169   37012.11
+100k Range Query by Category (100000 rows)      0.241      0.210      0.392    4149.14
+100k Aggregate Query (100000 rows)           82.198     78.071     96.670      12.17
+100k Single Row Update (100000 rows)          0.265      0.201      0.671    3776.00
+100k Batch Update 100 rows (100000 rows)      1.385      1.182      2.036     721.89
 ================================================================================
 ```
 
