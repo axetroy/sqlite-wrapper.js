@@ -43,6 +43,7 @@ export class SQLiteWrapper {
 		});
 
 		this.#proc.on("close", () => {
+			if (this.#closed) return;
 			this.#handleFatalError(new Error("sqlite3 process closed unexpectedly"));
 		});
 	}
@@ -76,7 +77,9 @@ export class SQLiteWrapper {
 	}
 
 	close() {
+		if (this.#closed) return;
 		this.#closed = true;
+		this.#rejectPending(new Error("SQLiteWrapper is closed"));
 		this.#rl?.close();
 		this.#proc?.stdin?.end();
 		this.#proc?.kill();
@@ -130,7 +133,11 @@ export class SQLiteWrapper {
 		const statement = isRaw ? sql : sql.trim().replace(/;*$/, ";");
 
 		this.#logger?.debug?.("Executing SQL:", statement);
-		this.#proc.stdin.write(statement + EOL + END_SIGNAL);
+		try {
+			this.#proc.stdin.write(statement + EOL + END_SIGNAL);
+		} catch (error) {
+			this.#handleFatalError(error);
+		}
 	}
 
 	#handleLine(line) {
@@ -160,11 +167,28 @@ export class SQLiteWrapper {
 		this.#maybeProcessNext();
 	}
 
-	#handleFatalError(error) {
-		this.close();
+	#rejectPending(error) {
 		if (this.#current) {
-			this.#current.reject(new Error("sqlite3 process error: " + error.message, { cause: error }));
+			this.#current.reject(error);
 			this.#current = null;
 		}
+
+		while (this.#queue.length > 0) {
+			const task = this.#queue.shift();
+			task.reject(error);
+		}
+
+		this.#stdoutBuffer = "";
+		this.#stderrBuffer = "";
+	}
+
+	#handleFatalError(error) {
+		if (this.#closed) return;
+
+		this.#closed = true;
+		this.#rejectPending(new Error("sqlite3 process error: " + error.message, { cause: error }));
+		this.#rl?.close();
+		this.#proc?.stdin?.end();
+		this.#proc?.kill();
 	}
 }

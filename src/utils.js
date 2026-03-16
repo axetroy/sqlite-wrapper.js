@@ -20,8 +20,116 @@ export function escapeValue(value) {
  */
 export function interpolateSQL(sql, params) {
 	let i = 0;
-	return sql.replace(/\?/g, () => {
-		if (i >= params.length) throw new Error("Too few parameters provided");
-		return escapeValue(params[i++]);
-	});
+	let interpolated = "";
+	let state = "normal";
+	let stateStartPos = -1;
+
+	for (let pos = 0; pos < sql.length; pos++) {
+		const ch = sql[pos];
+		const next = sql[pos + 1];
+
+		if (state === "normal") {
+			if (ch === "'") {
+				state = "singleQuote";
+				stateStartPos = pos;
+				interpolated += ch;
+				continue;
+			}
+
+			if (ch === '"') {
+				state = "doubleQuote";
+				stateStartPos = pos;
+				interpolated += ch;
+				continue;
+			}
+
+			if (ch === "-" && next === "-") {
+				state = "lineComment";
+				interpolated += "--";
+				pos++;
+				continue;
+			}
+
+			if (ch === "/" && next === "*") {
+				state = "blockComment";
+				stateStartPos = pos;
+				interpolated += "/*";
+				pos++;
+				continue;
+			}
+
+			if (ch === "?") {
+				if (i >= params.length) throw new Error("Too few parameters provided");
+				interpolated += escapeValue(params[i++]);
+				continue;
+			}
+
+			interpolated += ch;
+			continue;
+		}
+
+		if (state === "singleQuote") {
+			interpolated += ch;
+
+			if (ch === "'" && next === "'") {
+				interpolated += next;
+				pos++;
+				continue;
+			}
+
+			if (ch === "'") {
+				state = "normal";
+				stateStartPos = -1;
+			}
+			continue;
+		}
+
+		if (state === "doubleQuote") {
+			interpolated += ch;
+
+			if (ch === '"' && next === '"') {
+				interpolated += next;
+				pos++;
+				continue;
+			}
+
+			if (ch === '"') {
+				state = "normal";
+				stateStartPos = -1;
+			}
+			continue;
+		}
+
+		if (state === "lineComment") {
+			interpolated += ch;
+			if (ch === "\n") state = "normal";
+			continue;
+		}
+
+		if (state === "blockComment") {
+			interpolated += ch;
+			if (ch === "*" && next === "/") {
+				interpolated += next;
+				pos++;
+				state = "normal";
+				stateStartPos = -1;
+			}
+		}
+	}
+
+	if (state === "singleQuote") {
+		throw new Error(`Unterminated single-quoted string starting at position ${stateStartPos + 1}`);
+	}
+
+	if (state === "doubleQuote") {
+		throw new Error(`Unterminated double-quoted identifier/string starting at position ${stateStartPos + 1}`);
+	}
+
+	if (state === "blockComment") {
+		throw new Error(`Unterminated block comment starting at position ${stateStartPos + 1}`);
+	}
+
+	if (i < params.length) throw new Error("Too many parameters provided");
+
+	return interpolated;
 }
