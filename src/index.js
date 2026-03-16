@@ -2,11 +2,12 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { EOL } from "node:os";
 import { END_SIGNAL, END_MARKERS } from "./constants.js";
+import { Queue } from "./queue.js";
 import { interpolateSQL } from "./utils.js";
 export { escapeValue, interpolateSQL } from "./utils.js";
 
 export class SQLiteWrapper {
-	#queue = [];
+	#queue = new Queue();
 	#current = null;
 	#closed = false;
 	#stdoutBuffer = "";
@@ -99,7 +100,7 @@ export class SQLiteWrapper {
 				this.#logger?.debug?.("SQL execution completed in ", Date.now() - startTime, "ms");
 			};
 
-			this.#queue.push({
+			this.#queue.enqueue({
 				sql: formatted,
 				resolve: (...args) => {
 					end();
@@ -120,14 +121,14 @@ export class SQLiteWrapper {
 		if (this.#closed) return Promise.reject(new Error("Cannot enqueue command on closed SQLiteWrapper"));
 
 		return new Promise((resolve, reject) => {
-			this.#queue.push({ sql: command, resolve, reject, isRaw: true });
+			this.#queue.enqueue({ sql: command, resolve, reject, isRaw: true });
 			this.#maybeProcessNext();
 		});
 	}
 
 	#maybeProcessNext() {
-		if (this.#closed || this.#current || this.#queue.length === 0) return;
-		this.#current = this.#queue.shift();
+		if (this.#closed || this.#current || this.#queue.isEmpty()) return;
+		this.#current = this.#queue.dequeue();
 
 		const { sql, isRaw } = this.#current;
 		const statement = isRaw ? sql : sql.trim().replace(/;*$/, ";");
@@ -173,8 +174,8 @@ export class SQLiteWrapper {
 			this.#current = null;
 		}
 
-		while (this.#queue.length > 0) {
-			const task = this.#queue.shift();
+		while (!this.#queue.isEmpty()) {
+			const task = this.#queue.dequeue();
 			task.reject(error);
 		}
 
