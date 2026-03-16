@@ -110,8 +110,7 @@ export class SQLiteWrapper {
 					end();
 					reject(...args);
 				},
-				isRaw: false,
-				start: Date.now(),
+				isRaw: false
 			});
 			this.#maybeProcessNext();
 		});
