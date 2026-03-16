@@ -22,6 +22,7 @@ const PRODUCT_COUNT = 1000;
 const CUSTOMER_COUNT = 100;
 const ORDER_COUNT = 1000;
 const TEMP_DATA_COUNT = 5000;
+const LARGE_TABLE_ROW_COUNT = 100000;
 
 /**
  * Get SQLite3 path, trying downloaded binary first, then system sqlite3
@@ -98,16 +99,16 @@ function displayResults(results) {
 	console.log("=".repeat(80));
 	console.log(
 		`${"Benchmark".padEnd(40)} ${"Avg (ms)".padStart(10)} ${"Min (ms)".padStart(10)} ${"Max (ms)".padStart(10)} ${"Ops/sec".padStart(
-			10
-		)}`
+			10,
+		)}`,
 	);
 	console.log("-".repeat(80));
 
 	for (const result of results) {
 		console.log(
 			`${result.name.padEnd(40)} ${result.avgTime.padStart(10)} ${result.minTime.padStart(10)} ${result.maxTime.padStart(
-				10
-			)} ${result.opsPerSecond.padStart(10)}`
+				10,
+			)} ${result.opsPerSecond.padStart(10)}`,
 		);
 	}
 
@@ -133,10 +134,10 @@ async function main() {
 				async () => {
 					await sqlite.exec(`CREATE TABLE IF NOT EXISTS test_table_${counter++} (id INTEGER PRIMARY KEY, name TEXT)`);
 				},
-				50
-			)
+				50,
+			),
 		);
-		await sqlite.close();
+		sqlite.close();
 	}
 
 	// Benchmark 2: Single insert
@@ -149,10 +150,10 @@ async function main() {
 				async () => {
 					await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?)", ["John Doe", 30]);
 				},
-				1000
-			)
+				1000,
+			),
 		);
-		await sqlite.close();
+		sqlite.close();
 	}
 
 	// Benchmark 3: Bulk insert (with transaction)
@@ -169,10 +170,10 @@ async function main() {
 					}
 					await sqlite.exec("COMMIT");
 				},
-				10
-			)
+				10,
+			),
 		);
-		await sqlite.close();
+		sqlite.close();
 	}
 
 	// Benchmark 4: Simple SELECT query
@@ -191,10 +192,10 @@ async function main() {
 				async () => {
 					await sqlite.query("SELECT * FROM products");
 				},
-				100
-			)
+				100,
+			),
 		);
-		await sqlite.close();
+		sqlite.close();
 	}
 
 	// Benchmark 5: SELECT with WHERE clause
@@ -206,10 +207,10 @@ async function main() {
 				async () => {
 					await sqlite.query("SELECT * FROM products WHERE price > ?", [50]);
 				},
-				100
-			)
+				100,
+			),
 		);
-		await sqlite.close();
+		sqlite.close();
 	}
 
 	// Benchmark 6: UPDATE operation
@@ -222,10 +223,10 @@ async function main() {
 					const id = Math.floor(Math.random() * PRODUCT_COUNT) + 1;
 					await sqlite.exec("UPDATE products SET price = ? WHERE id = ?", [99.99, id]);
 				},
-				500
-			)
+				500,
+			),
 		);
-		await sqlite.close();
+		sqlite.close();
 	}
 
 	// Benchmark 7: DELETE operation
@@ -245,10 +246,10 @@ async function main() {
 				async () => {
 					await sqlite.exec("DELETE FROM temp_data WHERE id = ?", [deleteId++]);
 				},
-				500
-			)
+				500,
+			),
 		);
-		await sqlite.close();
+		sqlite.close();
 	}
 
 	// Benchmark 8: Complex JOIN query
@@ -289,10 +290,10 @@ async function main() {
 				async () => {
 					await sqlite.query("SELECT orders.*, customers.name FROM orders JOIN customers ON orders.user_id = customers.id");
 				},
-				50
-			)
+				50,
+			),
 		);
-		await sqlite.close();
+		sqlite.close();
 	}
 
 	// Benchmark 9: Transaction with multiple operations
@@ -309,10 +310,116 @@ async function main() {
 					}
 					await sqlite.exec("COMMIT");
 				},
-				100
-			)
+				100,
+			),
 		);
-		await sqlite.close();
+		sqlite.close();
+	}
+
+	// Benchmark 10: 100k-row table (query + update performance)
+	{
+		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		console.log(`Preparing 100k-row benchmark table (${LARGE_TABLE_ROW_COUNT} rows)...`);
+
+		await sqlite.exec("DROP TABLE IF EXISTS large_bench");
+		await sqlite.exec(`
+			CREATE TABLE large_bench (
+				id INTEGER PRIMARY KEY,
+				name TEXT NOT NULL,
+				category INTEGER NOT NULL,
+				score INTEGER NOT NULL,
+				updated_at TEXT NOT NULL
+			)
+		`);
+
+		// Use recursive CTE to seed 100k rows in one statement to keep setup time manageable.
+		await sqlite.exec(`
+			WITH RECURSIVE seq(n) AS (
+				SELECT 1
+				UNION ALL
+				SELECT n + 1 FROM seq WHERE n < ${LARGE_TABLE_ROW_COUNT}
+			)
+			INSERT INTO large_bench (id, name, category, score, updated_at)
+			SELECT
+				n,
+				'User ' || n,
+				n % 100,
+				(n * 13) % 1000,
+				datetime('now')
+			FROM seq
+		`);
+
+		await sqlite.exec("CREATE INDEX IF NOT EXISTS idx_large_bench_category ON large_bench(category)");
+		await sqlite.exec("CREATE INDEX IF NOT EXISTS idx_large_bench_score ON large_bench(score)");
+
+		let queryId = 1;
+		results.push(
+			await benchmark(
+				`100k Point Query by ID (${LARGE_TABLE_ROW_COUNT} rows)`,
+				async () => {
+					await sqlite.query("SELECT id, name, score FROM large_bench WHERE id = ?", [queryId]);
+					queryId++;
+					if (queryId > LARGE_TABLE_ROW_COUNT) queryId = 1;
+				},
+				1000,
+			),
+		);
+
+		let category = 0;
+		results.push(
+			await benchmark(
+				`100k Range Query by Category (${LARGE_TABLE_ROW_COUNT} rows)`,
+				async () => {
+					await sqlite.query("SELECT id, score FROM large_bench WHERE category = ? ORDER BY id LIMIT 200", [category]);
+					category = (category + 1) % 100;
+				},
+				200,
+			),
+		);
+
+		results.push(
+			await benchmark(
+				`100k Aggregate Query (${LARGE_TABLE_ROW_COUNT} rows)`,
+				async () => {
+					await sqlite.query("SELECT category, COUNT(*) AS total, AVG(score) AS avg_score FROM large_bench GROUP BY category");
+				},
+				100,
+			),
+		);
+
+		let updateId = 1;
+		results.push(
+			await benchmark(
+				`100k Single Row Update (${LARGE_TABLE_ROW_COUNT} rows)`,
+				async () => {
+					await sqlite.exec("UPDATE large_bench SET score = ?, updated_at = datetime('now') WHERE id = ?", [999, updateId]);
+					updateId++;
+					if (updateId > LARGE_TABLE_ROW_COUNT) updateId = 1;
+				},
+				1000,
+			),
+		);
+
+		let updateOffset = 0;
+		results.push(
+			await benchmark(
+				`100k Batch Update 100 rows (${LARGE_TABLE_ROW_COUNT} rows)`,
+				async () => {
+					const minId = (updateOffset % (LARGE_TABLE_ROW_COUNT - 100)) + 1;
+					const maxId = minId + 99;
+					await sqlite.exec("BEGIN TRANSACTION");
+					await sqlite.exec("UPDATE large_bench SET score = score + 1, updated_at = datetime('now') WHERE id BETWEEN ? AND ?", [
+						minId,
+						maxId,
+					]);
+					await sqlite.exec("COMMIT");
+					updateOffset += 100;
+				},
+				100,
+			),
+		);
+
+		sqlite.close();
 	}
 
 	// Display results
