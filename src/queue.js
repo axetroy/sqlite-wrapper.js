@@ -43,6 +43,21 @@ export class Queue {
 		this.#size = 0;
 	}
 
+	find(predicate) {
+		let current = this.#head;
+
+		while (current) {
+			if (predicate(current.value)) return current.value;
+			current = current.next;
+		}
+
+		return null;
+	}
+
+	peek() {
+		return this.#head ? this.#head.value : null;
+	}
+
 	get size() {
 		return this.#size;
 	}
