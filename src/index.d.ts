@@ -1,3 +1,5 @@
+import { Queue } from "./queue";
+
 /**
  * Escape a single SQL value.
  * @param value
@@ -29,6 +31,11 @@ export interface SQLiteWrapperOptions {
 }
 
 export declare class SQLiteWrapper implements Disposable {
+	/**
+	 * Queue for pending SQL queries
+	 */
+	queue: Queue
+
 	/**
 	 *
 	 * @param exePath Path to the SQLite executable

@@ -54,8 +54,25 @@ export class Queue {
 		return null;
 	}
 
+	toArray() {
+		return Array.from(this.values());
+	}
+
+	*values() {
+		let current = this.#head;
+
+		while (current) {
+			yield current.value;
+			current = current.next;
+		}
+	}
+
 	peek() {
 		return this.#head ? this.#head.value : null;
+	}
+
+	[Symbol.iterator]() {
+		return this.values();
 	}
 
 	get size() {

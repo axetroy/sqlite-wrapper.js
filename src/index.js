@@ -6,7 +6,7 @@ import { interpolateSQL } from "./utils.js";
 export { escapeValue, interpolateSQL } from "./utils.js";
 
 export class SQLiteWrapper {
-	#queue = new Queue();
+	queue = new Queue();
 	#inflight = [];
 	#closed = false;
 	#stdoutChunkBuffer = [];
@@ -69,7 +69,7 @@ export class SQLiteWrapper {
 	// 主接口方法
 	// ----------------------------
 	get pendingQueries() {
-		return this.#queue.size + this.#inflight.length;
+		return this.queue.size + this.#inflight.length;
 	}
 
 	async exec(sql, params = []) {
@@ -109,7 +109,7 @@ export class SQLiteWrapper {
 				this.#logger?.debug?.("SQL execution completed in ", Date.now() - startTime, "ms");
 			};
 
-			this.#queue.enqueue({
+			this.queue.enqueue({
 				sql: formatted,
 				isQuery,
 				resolve: (...args) => {
@@ -129,18 +129,18 @@ export class SQLiteWrapper {
 	#pumpQueue() {
 		if (this.#closed || this.#isWaitingDrain) return;
 		if (this.#queryInFlight > 0) return;
-		if (this.#queue.isEmpty()) return;
-		if (this.#inflight.length > 0 && this.#queue.peek()?.isQuery) return;
+		if (this.queue.isEmpty()) return;
+		if (this.#inflight.length > 0 && this.queue.peek()?.isQuery) return;
 
 		let payload = "";
 
-		while (!this.#queue.isEmpty() && this.#inflight.length < this.#maxInFlight && payload.length < this.#maxBatchChars) {
-			const nextTask = this.#queue.peek();
+		while (!this.queue.isEmpty() && this.#inflight.length < this.#maxInFlight && payload.length < this.#maxBatchChars) {
+			const nextTask = this.queue.peek();
 			if (!nextTask) break;
 
 			if (nextTask.isQuery && this.#inflight.length > 0) break;
 
-			const task = this.#queue.dequeue();
+			const task = this.queue.dequeue();
 			const { sql, isRaw } = task;
 			const statement = isRaw ? sql : sql.trim().replace(/;*$/, ";");
 
@@ -259,8 +259,8 @@ export class SQLiteWrapper {
 		}
 		this.#inflight = [];
 
-		while (!this.#queue.isEmpty()) {
-			const task = this.#queue.dequeue();
+		while (!this.queue.isEmpty()) {
+			const task = this.queue.dequeue();
 			task.reject(error);
 		}
 
@@ -283,7 +283,7 @@ export class SQLiteWrapper {
 	}
 
 	[Symbol.dispose]() {
-		this.#queue.clear();
+		this.queue.clear();
 		this.close();
 	}
 }
