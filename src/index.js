@@ -57,6 +57,10 @@ export class SQLiteWrapper {
 	// ----------------------------
 	// 主接口方法
 	// ----------------------------
+	get pendingQueries() {
+		return this.#queue.size + (this.#current ? 1 : 0);
+	}
+
 	async exec(sql, params = []) {
 		return this.#enqueueSQL(sql, params);
 	}
@@ -104,7 +108,7 @@ export class SQLiteWrapper {
 					end();
 					reject(...args);
 				},
-				isRaw: false
+				isRaw: false,
 			});
 			this.#maybeProcessNext();
 		});
@@ -191,5 +195,10 @@ export class SQLiteWrapper {
 		this.#rejectPending(new Error("sqlite3 process error: " + error.message, { cause: error }));
 		this.#proc?.stdin?.end();
 		this.#proc?.kill();
+	}
+
+	[Symbol.dispose]() {
+		this.#queue.clear();
+		this.close();
 	}
 }

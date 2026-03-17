@@ -28,7 +28,7 @@ export interface SQLiteWrapperOptions {
 	logger?: Logger;
 }
 
-export declare class SQLiteWrapper {
+export declare class SQLiteWrapper implements Disposable {
 	/**
 	 *
 	 * @param exePath Path to the SQLite executable
@@ -37,6 +37,12 @@ export declare class SQLiteWrapper {
 	 * @param options.logger Logger instance for logging
 	 */
 	constructor(exePath: string, options?: SQLiteWrapperOptions);
+
+	/**
+	 * Get pending SQL queries in the queue.
+	 */
+	get pendingQueries(): number;
+
 
 	/**
 	 * Executes a SQL query.
@@ -56,4 +62,6 @@ export declare class SQLiteWrapper {
 	 * Closes the SQLite connection (Process).
 	 */
 	close(): void;
+
+	[Symbol.dispose](): void;
 }
