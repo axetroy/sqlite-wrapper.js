@@ -24,6 +24,8 @@ const ORDER_COUNT = 1000;
 const TEMP_DATA_COUNT = 5000;
 const LARGE_TABLE_ROW_COUNT = 100000;
 const SIMPLE_COMMAND_COUNT = 100000;
+const BURST_INSERT_COUNT = 20000;
+const CHUNKED_ENQUEUE_SIZE = 1000;
 
 /**
  * Get SQLite3 path, trying downloaded binary first, then system sqlite3
@@ -518,6 +520,154 @@ async function main() {
 				for (let i = 1; i <= SIMPLE_COMMAND_COUNT; i++) {
 					await sqlite.exec("UPDATE update_100k_bench SET score = ?, updated_at = datetime('now') WHERE id = ?", [(i + 1) % 1000, i]);
 				}
+			}),
+		);
+		sqlite.close();
+	}
+
+	// Benchmark 14: burst enqueue tens-of-thousands inserts end-to-end
+	{
+		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		await sqlite.exec("DROP TABLE IF EXISTS burst_enqueued_insert_bench");
+		await sqlite.exec(`
+			CREATE TABLE burst_enqueued_insert_bench (
+				id INTEGER PRIMARY KEY,
+				name TEXT NOT NULL,
+				score INTEGER NOT NULL
+			)
+		`);
+
+		results.push(
+			await benchmarkWorkload(`20k Burst Enqueue INSERT (Promise.all)`, BURST_INSERT_COUNT, async () => {
+				await sqlite.exec("BEGIN TRANSACTION");
+
+				const jobs = [];
+				for (let i = 1; i <= BURST_INSERT_COUNT; i++) {
+					jobs.push(
+						sqlite.exec("INSERT INTO burst_enqueued_insert_bench (id, name, score) VALUES (?, ?, ?)", [i, `User ${i}`, i % 1000]),
+					);
+				}
+
+				await Promise.all(jobs);
+				await sqlite.exec("COMMIT");
+			}),
+		);
+		sqlite.close();
+	}
+
+	// Benchmark 15: sequential enqueue tens-of-thousands inserts end-to-end
+	{
+		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		await sqlite.exec("DROP TABLE IF EXISTS sequential_enqueued_insert_bench");
+		await sqlite.exec(`
+			CREATE TABLE sequential_enqueued_insert_bench (
+				id INTEGER PRIMARY KEY,
+				name TEXT NOT NULL,
+				score INTEGER NOT NULL
+			)
+		`);
+
+		results.push(
+			await benchmarkWorkload(`20k Sequential Enqueue INSERT (await loop)`, BURST_INSERT_COUNT, async () => {
+				await sqlite.exec("BEGIN TRANSACTION");
+
+				for (let i = 1; i <= BURST_INSERT_COUNT; i++) {
+					await sqlite.exec("INSERT INTO sequential_enqueued_insert_bench (id, name, score) VALUES (?, ?, ?)", [
+						i,
+						`User ${i}`,
+						i % 1000,
+					]);
+				}
+
+				await sqlite.exec("COMMIT");
+			}),
+		);
+		sqlite.close();
+	}
+
+	// Benchmark 16: chunked enqueue tens-of-thousands inserts end-to-end
+	{
+		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		await sqlite.exec("DROP TABLE IF EXISTS chunked_enqueued_insert_bench");
+		await sqlite.exec(`
+			CREATE TABLE chunked_enqueued_insert_bench (
+				id INTEGER PRIMARY KEY,
+				name TEXT NOT NULL,
+				score INTEGER NOT NULL
+			)
+		`);
+
+		results.push(
+			await benchmarkWorkload(
+				`20k Chunked Enqueue INSERT (${CHUNKED_ENQUEUE_SIZE}/chunk)` ,
+				BURST_INSERT_COUNT,
+				async () => {
+					await sqlite.exec("BEGIN TRANSACTION");
+
+					for (let start = 1; start <= BURST_INSERT_COUNT; start += CHUNKED_ENQUEUE_SIZE) {
+						const end = Math.min(start + CHUNKED_ENQUEUE_SIZE - 1, BURST_INSERT_COUNT);
+						const jobs = [];
+
+						for (let i = start; i <= end; i++) {
+							jobs.push(
+								sqlite.exec("INSERT INTO chunked_enqueued_insert_bench (id, name, score) VALUES (?, ?, ?)", [
+									i,
+									`User ${i}`,
+									i % 1000,
+								]),
+							);
+						}
+
+						await Promise.all(jobs);
+					}
+
+					await sqlite.exec("COMMIT");
+				},
+			),
+		);
+		sqlite.close();
+	}
+
+	// Benchmark 17: burst enqueue tens-of-thousands updates end-to-end
+	{
+		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		await sqlite.exec("DROP TABLE IF EXISTS burst_enqueued_update_bench");
+		await sqlite.exec(`
+			CREATE TABLE burst_enqueued_update_bench (
+				id INTEGER PRIMARY KEY,
+				name TEXT NOT NULL,
+				score INTEGER NOT NULL,
+				updated_at TEXT NOT NULL
+			)
+		`);
+
+		await sqlite.exec(`
+			WITH RECURSIVE seq(n) AS (
+				SELECT 1
+				UNION ALL
+				SELECT n + 1 FROM seq WHERE n < ${BURST_INSERT_COUNT}
+			)
+			INSERT INTO burst_enqueued_update_bench (id, name, score, updated_at)
+			SELECT n, 'User ' || n, n % 1000, datetime('now')
+			FROM seq
+		`);
+
+		results.push(
+			await benchmarkWorkload(`20k Burst Enqueue UPDATE (Promise.all)`, BURST_INSERT_COUNT, async () => {
+				await sqlite.exec("BEGIN TRANSACTION");
+
+				const jobs = [];
+				for (let i = 1; i <= BURST_INSERT_COUNT; i++) {
+					jobs.push(
+						sqlite.exec(
+							"UPDATE burst_enqueued_update_bench SET score = ?, updated_at = datetime('now') WHERE id = ?",
+							[(i + 7) % 1000, i],
+						),
+					);
+				}
+
+				await Promise.all(jobs);
+				await sqlite.exec("COMMIT");
 			}),
 		);
 		sqlite.close();

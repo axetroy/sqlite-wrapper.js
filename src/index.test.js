@@ -110,6 +110,22 @@ describe("SQLiteWrapper", () => {
 		);
 	});
 
+	test("handles large burst enqueued writes", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS burst_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+
+		const total = 3000;
+		const jobs = [];
+
+		for (let i = 0; i < total; i++) {
+			jobs.push(sqlite.exec("INSERT INTO burst_users (name) VALUES (?)", [`user-${i}`]));
+		}
+
+		await Promise.all(jobs);
+
+		const countRows = await sqlite.query("SELECT COUNT(*) AS total FROM burst_users");
+		assert.equal(countRows[0].total, total);
+	});
+
 	test("keeps result sets separated for batched concurrent queries", async () => {
 		await sqlite.exec(
 			outdent`
@@ -156,34 +172,23 @@ describe("SQLiteWrapper", () => {
 		assert.deepEqual(successResult.value, [{ id: 1, name: "Alice" }]);
 	});
 
-	test.skip("keeps parsing correct with four batched statements where 1 and 3 succeed, 2 and 4 fail", async () => {
-		await sqlite.exec("CREATE TABLE IF NOT EXISTS mixed_batch_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
-		await sqlite.exec(
-			outdent`
-				INSERT INTO mixed_batch_users (name) VALUES (?);
-				INSERT INTO mixed_batch_users (name) VALUES (?);
-			`,
-			["Alice", "Bob"],
-		);
+	test("does not misattribute errors to successful concurrent queries", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS mixed_isolation_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+		await sqlite.exec("DELETE FROM mixed_isolation_users");
+		await sqlite.exec("INSERT INTO mixed_isolation_users (name) VALUES (?)", ["Alice"]);
 
-		const results = await Promise.allSettled([
-			sqlite.query("SELECT id, name FROM mixed_batch_users WHERE id = ?", [1]),
-			sqlite.query("SELECT broken syntax FROM"),
-			sqlite.query("SELECT id, name FROM mixed_batch_users WHERE id = ?", [2]),
-			sqlite.query("SELECT another broken syntax FROM"),
-		]);
+		for (let i = 0; i < 50; i++) {
+			const [failedResult, successResult] = await Promise.allSettled([
+				sqlite.query(`SELECT * FROM missing_mixed_table_${i}`),
+				sqlite.query("SELECT id, name FROM mixed_isolation_users ORDER BY id ASC"),
+			]);
 
-		assert.equal(results[0].status, "fulfilled");
-		assert.deepEqual(results[0].value, [{ id: 1, name: "Alice" }]);
+			assert.equal(failedResult.status, "rejected");
+			assert.match(failedResult.reason.message, new RegExp(`missing_mixed_table_${i}`));
 
-		assert.equal(results[1].status, "rejected");
-		assert.match(results[1].reason.message, /Parse error|syntax error/i);
-
-		assert.equal(results[2].status, "fulfilled");
-		assert.deepEqual(results[2].value, [{ id: 2, name: "Bob" }]);
-
-		assert.equal(results[3].status, "rejected");
-		assert.match(results[3].reason.message, /Parse error|syntax error/i);
+			assert.equal(successResult.status, "fulfilled");
+			assert.deepEqual(successResult.value, [{ id: 1, name: "Alice" }]);
+		}
 	});
 
 	test("rejects when sqlite binary is missing", async () => {

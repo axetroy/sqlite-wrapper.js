@@ -27,6 +27,10 @@ The benchmark suite tests the following operations:
 11. **100k Simple Commands** - End-to-end time to execute 100000 simple SQL statements sequentially
 12. **100k Sequential INSERT** - End-to-end time to execute 100000 INSERT statements sequentially
 13. **100k Sequential UPDATE** - End-to-end time to execute 100000 UPDATE statements sequentially against a preloaded table
+14. **20k Burst Enqueue INSERT** - End-to-end time to enqueue 20000 INSERT statements at once with `Promise.all`, then wait for full queue digestion
+15. **20k Sequential Enqueue INSERT** - End-to-end time to enqueue 20000 INSERT statements one-by-one using `await` loop
+16. **20k Chunked Enqueue INSERT** - End-to-end time to enqueue 20000 INSERT statements in chunks (1000 per chunk) with `Promise.all`
+17. **20k Burst Enqueue UPDATE** - End-to-end time to enqueue 20000 UPDATE statements at once with `Promise.all`, then wait for full queue digestion
 
 ## Understanding Results
 
@@ -38,7 +42,7 @@ The benchmark results display the following metrics for each operation:
 - **Total (ms)**: Total execution time for the measured run
 - **Ops/sec**: Operations per second (throughput)
 
-For the 100k fixed-workload scenarios, the benchmark is a single fixed workload rather than repeated sampling. In those rows:
+For fixed-workload scenarios (including 100k and 20k enqueue strategy comparisons), the benchmark is a single fixed workload rather than repeated sampling. In those rows:
 
 - **Total (ms)** is the full time to digest 100000 commands
 - **Avg (ms)** is the average time per command
