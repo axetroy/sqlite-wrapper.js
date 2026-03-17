@@ -23,6 +23,7 @@ const CUSTOMER_COUNT = 100;
 const ORDER_COUNT = 1000;
 const TEMP_DATA_COUNT = 5000;
 const LARGE_TABLE_ROW_COUNT = 100000;
+const SIMPLE_COMMAND_COUNT = 100000;
 
 /**
  * Get SQLite3 path, trying downloaded binary first, then system sqlite3
@@ -81,9 +82,36 @@ async function benchmark(name, fn, iterations = 100) {
 
 	return {
 		name,
+		kind: "sample",
 		avgTime: avgTime.toFixed(3),
 		minTime: minTime.toFixed(3),
 		maxTime: maxTime.toFixed(3),
+		totalTime: totalTime.toFixed(3),
+		opsPerSecond: opsPerSecond.toFixed(2),
+	};
+}
+
+/**
+ * Measure a fixed-size workload end-to-end.
+ * @param {string} name - Benchmark name
+ * @param {number} operationCount - Number of operations executed by fn
+ * @param {Function} fn - Function that executes the whole workload
+ * @returns {Promise<{name: string, kind: string, operationCount: number, avgTime: string, minTime: string, maxTime: string, totalTime: string, opsPerSecond: string}>}
+ */
+async function benchmarkWorkload(name, operationCount, fn) {
+	const start = performance.now();
+	await fn();
+	const totalTime = performance.now() - start;
+	const avgTime = totalTime / operationCount;
+	const opsPerSecond = operationCount / (totalTime / 1000);
+
+	return {
+		name,
+		kind: "workload",
+		operationCount,
+		avgTime: avgTime.toFixed(6),
+		minTime: "-",
+		maxTime: "-",
 		totalTime: totalTime.toFixed(3),
 		opsPerSecond: opsPerSecond.toFixed(2),
 	};
@@ -98,7 +126,7 @@ function displayResults(results) {
 	console.log("SQLite Wrapper Benchmark Results");
 	console.log("=".repeat(80));
 	console.log(
-		`${"Benchmark".padEnd(40)} ${"Avg (ms)".padStart(10)} ${"Min (ms)".padStart(10)} ${"Max (ms)".padStart(10)} ${"Ops/sec".padStart(
+		`${"Benchmark".padEnd(40)} ${"Avg (ms)".padStart(10)} ${"Min (ms)".padStart(10)} ${"Max (ms)".padStart(10)} ${"Total (ms)".padStart(12)} ${"Ops/sec".padStart(
 			10,
 		)}`,
 	);
@@ -108,7 +136,7 @@ function displayResults(results) {
 		console.log(
 			`${result.name.padEnd(40)} ${result.avgTime.padStart(10)} ${result.minTime.padStart(10)} ${result.maxTime.padStart(
 				10,
-			)} ${result.opsPerSecond.padStart(10)}`,
+			)} ${result.totalTime.padStart(12)} ${result.opsPerSecond.padStart(10)}`,
 		);
 	}
 
@@ -419,6 +447,79 @@ async function main() {
 			),
 		);
 
+		sqlite.close();
+	}
+
+	// Benchmark 11: digest 100k simple commands end-to-end
+	{
+		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		results.push(
+			await benchmarkWorkload(`100k Simple Commands (SELECT 1)`, SIMPLE_COMMAND_COUNT, async () => {
+				for (let i = 0; i < SIMPLE_COMMAND_COUNT; i++) {
+					await sqlite.exec("SELECT 1");
+				}
+			}),
+		);
+		sqlite.close();
+	}
+
+	// Benchmark 12: digest 100k inserts end-to-end
+	{
+		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		await sqlite.exec("DROP TABLE IF EXISTS insert_100k_bench");
+		await sqlite.exec(`
+			CREATE TABLE insert_100k_bench (
+				id INTEGER PRIMARY KEY,
+				name TEXT NOT NULL,
+				score INTEGER NOT NULL
+			)
+		`);
+
+		results.push(
+			await benchmarkWorkload(`100k Sequential INSERT`, SIMPLE_COMMAND_COUNT, async () => {
+				for (let i = 1; i <= SIMPLE_COMMAND_COUNT; i++) {
+					await sqlite.exec("INSERT INTO insert_100k_bench (id, name, score) VALUES (?, ?, ?)", [i, `User ${i}`, i % 1000]);
+				}
+			}),
+		);
+		sqlite.close();
+	}
+
+	// Benchmark 13: digest 100k updates end-to-end
+	{
+		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		await sqlite.exec("DROP TABLE IF EXISTS update_100k_bench");
+		await sqlite.exec(`
+			CREATE TABLE update_100k_bench (
+				id INTEGER PRIMARY KEY,
+				name TEXT NOT NULL,
+				score INTEGER NOT NULL,
+				updated_at TEXT NOT NULL
+			)
+		`);
+
+		await sqlite.exec(`
+			WITH RECURSIVE seq(n) AS (
+				SELECT 1
+				UNION ALL
+				SELECT n + 1 FROM seq WHERE n < ${SIMPLE_COMMAND_COUNT}
+			)
+			INSERT INTO update_100k_bench (id, name, score, updated_at)
+			SELECT
+				n,
+				'User ' || n,
+				n % 1000,
+				datetime('now')
+			FROM seq
+		`);
+
+		results.push(
+			await benchmarkWorkload(`100k Sequential UPDATE`, SIMPLE_COMMAND_COUNT, async () => {
+				for (let i = 1; i <= SIMPLE_COMMAND_COUNT; i++) {
+					await sqlite.exec("UPDATE update_100k_bench SET score = ?, updated_at = datetime('now') WHERE id = ?", [(i + 1) % 1000, i]);
+				}
+			}),
+		);
 		sqlite.close();
 	}
 

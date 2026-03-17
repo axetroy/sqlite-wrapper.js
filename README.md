@@ -12,17 +12,17 @@ It uses the SQLite3 executable file for database operations and it's **zero-depe
 
 ## Features
 
--   🚀 **Zero dependencies** - No native bindings required
--   📦 **Uses SQLite3 CLI** - Works with the SQLite3 command-line executable
--   🔒 **Automatic SQL escaping** - Built-in parameter escaping to prevent SQL injection
--   📝 **TypeScript support** - Full TypeScript type definitions included
--   🔄 **Promise-based API** - Modern async/await interface
--   📦 **Dual module support** - Works with both ESM and CommonJS
+- 🚀 **Zero dependencies** - No native bindings required
+- 📦 **Uses SQLite3 CLI** - Works with the SQLite3 command-line executable
+- 🔒 **Automatic SQL escaping** - Built-in parameter escaping to prevent SQL injection
+- 📝 **TypeScript support** - Full TypeScript type definitions included
+- 🔄 **Promise-based API** - Modern async/await interface
+- 📦 **Dual module support** - Works with both ESM and CommonJS
 
 ## Requirements
 
--   Node.js >= 18 (tested on Node.js 22)
--   SQLite3 executable installed on your system
+- Node.js >= 18 (tested on Node.js 22)
+- SQLite3 executable installed on your system
 
 ## Installation
 
@@ -258,7 +258,7 @@ await sqlite.exec(
   INSERT INTO users (name) VALUES (?);
   INSERT INTO users (name) VALUES (?);
 `,
-	["Alice", "Bob"]
+	["Alice", "Bob"],
 );
 
 await sqlite.close();
@@ -268,10 +268,10 @@ await sqlite.close();
 
 Unlike other SQLite libraries for Node.js that require native bindings (like `better-sqlite3` or `sqlite3`), this library:
 
--   **No compilation required** - Works immediately without building native modules
--   **Cross-platform** - Works anywhere SQLite3 CLI is available
--   **Simple deployment** - No need to worry about native dependencies in Docker/CI environments
--   **Lightweight** - Zero npm dependencies
+- **No compilation required** - Works immediately without building native modules
+- **Cross-platform** - Works anywhere SQLite3 CLI is available
+- **Simple deployment** - No need to worry about native dependencies in Docker/CI environments
+- **Lightweight** - Zero npm dependencies
 
 ## Benchmarks
 
@@ -289,22 +289,25 @@ This will test various operations including table creation, inserts, queries, up
 ================================================================================
 SQLite Wrapper Benchmark Results
 ================================================================================
-Benchmark                                  Avg (ms)   Min (ms)   Max (ms)    Ops/sec
+Benchmark                                  Avg (ms)   Min (ms)   Max (ms)   Total (ms)    Ops/sec
 --------------------------------------------------------------------------------
-Table Creation                                0.349      0.218      0.877    2868.39
-Single Row Insert                             0.305      0.231      0.922    3279.51
-Bulk Insert (100 rows with transaction)       2.014      1.633      2.669     496.57
-Simple SELECT (1000 rows)                     1.749      1.646      1.981     571.65
-SELECT with WHERE clause                      0.964      0.933      1.638    1037.53
-UPDATE Single Row                             0.216      0.018      0.902    4629.84
-DELETE Single Row                             0.369      0.169      6.048    2708.77
-JOIN Query (1000 orders, 100 customers)       2.111      2.040      2.297     473.62
-Transaction (5 inserts)                       0.395      0.329      0.590    2531.67
-100k Point Query by ID (100000 rows)          0.027      0.017      0.169   37012.11
-100k Range Query by Category (100000 rows)      0.241      0.210      0.392    4149.14
-100k Aggregate Query (100000 rows)           82.198     78.071     96.670      12.17
-100k Single Row Update (100000 rows)          0.265      0.201      0.671    3776.00
-100k Batch Update 100 rows (100000 rows)      1.385      1.182      2.036     721.89
+Table Creation                                0.317      0.242      0.594       15.864    3151.82
+Single Row Insert                             0.346      0.220      2.223      346.000    2890.18
+Bulk Insert (100 rows with transaction)       2.652      1.904      4.826       26.519     377.09
+Simple SELECT (1000 rows)                     2.180      1.897      5.782      217.974     458.77
+SELECT with WHERE clause                      1.086      0.997      1.876      108.609     920.73
+UPDATE Single Row                             0.289      0.022      6.153      144.744    3454.38
+DELETE Single Row                             0.294      0.199      1.375      147.227    3396.11
+JOIN Query (1000 orders, 100 customers)       2.280      2.056      3.487      114.013     438.55
+Transaction (5 inserts)                       0.400      0.325      0.680       40.026    2498.37
+100k Point Query by ID (100000 rows)          0.029      0.018      0.180       28.564   35009.15
+100k Range Query by Category (100000 rows)      0.231      0.210      0.271       46.134    4335.23
+100k Aggregate Query (100000 rows)           87.897     82.129    141.772     8789.676      11.38
+100k Single Row Update (100000 rows)          0.292      0.212      1.099      291.707    3428.09
+100k Batch Update 100 rows (100000 rows)      1.522      1.248      2.442      152.213     656.97
+100k Simple Commands (SELECT 1)            0.014345          -          -     1434.511   69710.16
+100k Sequential INSERT                     0.243934          -          -    24393.382    4099.47
+100k Sequential UPDATE                     0.235999          -          -    23599.891    4237.31
 ================================================================================
 ```
 
