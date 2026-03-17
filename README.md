@@ -290,29 +290,33 @@ This will test various operations including table creation, inserts, queries, up
 <details><summary>Apple M3 Pro Benchmark Results</summary>
 
 ```
-================================================================================
+================================================================================================================================
 SQLite Wrapper Benchmark Results
-================================================================================
-Benchmark                                  Avg (ms)   Min (ms)   Max (ms)   Total (ms)    Ops/sec
---------------------------------------------------------------------------------
-Table Creation                                0.317      0.242      0.594       15.864    3151.82
-Single Row Insert                             0.346      0.220      2.223      346.000    2890.18
-Bulk Insert (100 rows with transaction)       2.652      1.904      4.826       26.519     377.09
-Simple SELECT (1000 rows)                     2.180      1.897      5.782      217.974     458.77
-SELECT with WHERE clause                      1.086      0.997      1.876      108.609     920.73
-UPDATE Single Row                             0.289      0.022      6.153      144.744    3454.38
-DELETE Single Row                             0.294      0.199      1.375      147.227    3396.11
-JOIN Query (1000 orders, 100 customers)       2.280      2.056      3.487      114.013     438.55
-Transaction (5 inserts)                       0.400      0.325      0.680       40.026    2498.37
-100k Point Query by ID (100000 rows)          0.029      0.018      0.180       28.564   35009.15
-100k Range Query by Category (100000 rows)      0.231      0.210      0.271       46.134    4335.23
-100k Aggregate Query (100000 rows)           87.897     82.129    141.772     8789.676      11.38
-100k Single Row Update (100000 rows)          0.292      0.212      1.099      291.707    3428.09
-100k Batch Update 100 rows (100000 rows)      1.522      1.248      2.442      152.213     656.97
-100k Simple Commands (SELECT 1)            0.014345          -          -     1434.511   69710.16
-100k Sequential INSERT                     0.243934          -          -    24393.382    4099.47
-100k Sequential UPDATE                     0.235999          -          -    23599.891    4237.31
-================================================================================
+================================================================================================================================
+Benchmark                                                                  Avg (ms)   Min (ms)   Max (ms)  Total (ms)    Ops/sec
+--------------------------------------------------------------------------------------------------------------------------------
+Table Creation                                                                0.296      0.210      0.721      14.816    3374.69
+Single Row Insert                                                             0.324      0.208      2.436     324.119    3085.28
+Bulk Insert (100 rows with transaction)                                       1.997      1.729      2.699      19.968     500.80
+Simple SELECT (1000 rows)                                                     1.882      1.717      2.167     188.205     531.34
+SELECT with WHERE clause                                                      0.996      0.910      1.253      99.582    1004.19
+UPDATE Single Row                                                             0.177      0.019      0.355      88.517    5648.66
+DELETE Single Row                                                             0.294      0.173      3.665     147.141    3398.11
+JOIN Query (1000 orders, 100 customers)                                       2.146      2.072      2.330     107.278     466.08
+Transaction (5 inserts)                                                       0.351      0.275      0.576      35.134    2846.25
+100k Point Query by ID (100000 rows)                                          0.028      0.018      0.261      28.050   35651.01
+100k Range Query by Category (100000 rows)                                    0.240      0.214      0.282      48.072    4160.41
+100k Aggregate Query (100000 rows)                                           87.898     81.206    139.058    8789.809      11.38
+100k Single Row Update (100000 rows)                                          0.307      0.219      2.384     307.271    3254.45
+100k Batch Update 100 rows (100000 rows)                                      1.443      1.213      2.027     144.257     693.21
+100k Simple Commands (SELECT 1)                                            0.017037          -          -    1703.738   58694.47
+100k Sequential INSERT                                                     0.248893          -          -   24889.290    4017.79
+100k Sequential UPDATE                                                     0.247484          -          -   24748.373    4040.67
+20k Burst Enqueue INSERT (Promise.all)                                     0.008727          -          -     174.537  114588.86
+20k Sequential Enqueue INSERT (await loop)                                 0.019912          -          -     398.241   50220.84
+20k Chunked Enqueue INSERT (1000/chunk)                                    0.004907          -          -      98.138  203794.57
+20k Burst Enqueue UPDATE (Promise.all)                                     0.009929          -          -     198.575  100717.36
+================================================================================================================================
 ```
 
 </summary>

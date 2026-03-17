@@ -124,25 +124,85 @@ async function benchmarkWorkload(name, operationCount, fn) {
  * @param {Array} results - Array of benchmark results
  */
 function displayResults(results) {
-	console.log("\n" + "=".repeat(80));
+	const terminalWidth = Number(process.stdout.columns) || 120;
+	const separators = 5; // one space between each adjacent column
+	const minNameWidth = 20;
+	const maxNameWidth = 72;
+	const metricTitles = ["Avg (ms)", "Min (ms)", "Max (ms)", "Total (ms)", "Ops/sec"];
+	const metricWidths = [10, 10, 10, 11, 10];
+	const metricMinWidths = [8, 8, 8, 10, 8];
+
+	const metricWidthSum = () => metricWidths.reduce((sum, width) => sum + width, 0);
+	let nameWidth = Math.max(minNameWidth, Math.min(maxNameWidth, terminalWidth - metricWidthSum() - separators));
+	let tableWidth = nameWidth + metricWidthSum() + separators;
+
+	if (tableWidth > terminalWidth) {
+		let overflow = tableWidth - terminalWidth;
+
+		while (overflow > 0 && nameWidth > minNameWidth) {
+			nameWidth--;
+			overflow--;
+		}
+
+		while (overflow > 0) {
+			let shrunk = false;
+
+			for (let i = 0; i < metricWidths.length && overflow > 0; i++) {
+				if (metricWidths[i] > metricMinWidths[i]) {
+					metricWidths[i]--;
+					overflow--;
+					shrunk = true;
+				}
+			}
+
+			if (!shrunk) break;
+		}
+
+		tableWidth = Math.min(terminalWidth, nameWidth + metricWidthSum() + separators);
+	}
+
+	const truncate = (text, width) => {
+		if (text.length <= width) return text;
+		if (width <= 3) return text.slice(0, width);
+		return text.slice(0, width - 3) + "...";
+	};
+
+	const formatLeft = (text, width) => truncate(String(text), width).padEnd(width);
+	const formatRight = (text, width) => {
+		const value = String(text);
+		if (value.length > width) return value.slice(0, width);
+		return value.padStart(width);
+	};
+
+	console.log("\n" + "=".repeat(tableWidth));
 	console.log("SQLite Wrapper Benchmark Results");
-	console.log("=".repeat(80));
+	console.log("=".repeat(tableWidth));
 	console.log(
-		`${"Benchmark".padEnd(40)} ${"Avg (ms)".padStart(10)} ${"Min (ms)".padStart(10)} ${"Max (ms)".padStart(10)} ${"Total (ms)".padStart(12)} ${"Ops/sec".padStart(
-			10,
-		)}`,
+		[
+			formatLeft("Benchmark", nameWidth),
+			formatRight(metricTitles[0], metricWidths[0]),
+			formatRight(metricTitles[1], metricWidths[1]),
+			formatRight(metricTitles[2], metricWidths[2]),
+			formatRight(metricTitles[3], metricWidths[3]),
+			formatRight(metricTitles[4], metricWidths[4]),
+		].join(" "),
 	);
-	console.log("-".repeat(80));
+	console.log("-".repeat(tableWidth));
 
 	for (const result of results) {
 		console.log(
-			`${result.name.padEnd(40)} ${result.avgTime.padStart(10)} ${result.minTime.padStart(10)} ${result.maxTime.padStart(
-				10,
-			)} ${result.totalTime.padStart(12)} ${result.opsPerSecond.padStart(10)}`,
+			[
+				formatLeft(result.name, nameWidth),
+				formatRight(result.avgTime, metricWidths[0]),
+				formatRight(result.minTime, metricWidths[1]),
+				formatRight(result.maxTime, metricWidths[2]),
+				formatRight(result.totalTime, metricWidths[3]),
+				formatRight(result.opsPerSecond, metricWidths[4]),
+			].join(" "),
 		);
 	}
 
-	console.log("=".repeat(80) + "\n");
+	console.log("=".repeat(tableWidth) + "\n");
 }
 
 async function main() {
