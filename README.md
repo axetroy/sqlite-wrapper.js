@@ -84,6 +84,10 @@ new SQLiteWrapper(exePath, options?)
 
 #### Methods
 
+##### `get pendingQueries()`
+
+Returns the number of pending SQL queries in the queue.
+
 ##### `exec(sql, params?)`
 
 Executes a SQL statement without returning results. Use for `CREATE`, `INSERT`, `UPDATE`, `DELETE` operations.
