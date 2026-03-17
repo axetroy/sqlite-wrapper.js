@@ -156,7 +156,7 @@ describe("SQLiteWrapper", () => {
 		assert.deepEqual(successResult.value, [{ id: 1, name: "Alice" }]);
 	});
 
-		test.skip("keeps parsing correct with four batched statements where 1 and 3 succeed, 2 and 4 fail", async () => {
+	test.skip("keeps parsing correct with four batched statements where 1 and 3 succeed, 2 and 4 fail", async () => {
 		await sqlite.exec("CREATE TABLE IF NOT EXISTS mixed_batch_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
 		await sqlite.exec(
 			outdent`
@@ -168,16 +168,16 @@ describe("SQLiteWrapper", () => {
 
 		const results = await Promise.allSettled([
 			sqlite.query("SELECT id, name FROM mixed_batch_users WHERE id = ?", [1]),
-				sqlite.query("SELECT broken syntax FROM"),
+			sqlite.query("SELECT broken syntax FROM"),
 			sqlite.query("SELECT id, name FROM mixed_batch_users WHERE id = ?", [2]),
-				sqlite.query("SELECT another broken syntax FROM"),
+			sqlite.query("SELECT another broken syntax FROM"),
 		]);
 
 		assert.equal(results[0].status, "fulfilled");
 		assert.deepEqual(results[0].value, [{ id: 1, name: "Alice" }]);
 
 		assert.equal(results[1].status, "rejected");
-			assert.match(results[1].reason.message, /Parse error|syntax error/i);
+		assert.match(results[1].reason.message, /Parse error|syntax error/i);
 
 		assert.equal(results[2].status, "fulfilled");
 		assert.deepEqual(results[2].value, [{ id: 2, name: "Bob" }]);
