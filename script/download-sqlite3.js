@@ -63,12 +63,24 @@ function getSQLte3URL() {
 	}
 }
 
+const printDownloadInfo = (() => {
+	let printed = false;
+
+	return () => {
+		if (printed) return;
+
+		console.log("SQLite3 already exists, skipping download.");
+
+		printed = true;
+	};
+})();
+
 async function main() {
 	const sqlite3ToolZip = join(ROOT, "bin", "sqlite3-tool.zip");
 	const sqlite3Path = join(ROOT, "bin", "sqlite3" + (process.platform === "win32" ? ".exe" : ""));
 
 	if (fs.existsSync(sqlite3Path)) {
-		console.log("SQLite3 already exists, skipping download.");
+		printDownloadInfo();
 		return;
 	}
 
