@@ -10,9 +10,15 @@ To run the benchmarks, use the following command from the project root:
 npm run benchmark
 ```
 
+To run the standalone queue benchmark, use:
+
+```bash
+npm run benchmark:queue
+```
+
 ## What is Benchmarked
 
-The benchmark suite tests the following operations:
+The SQLite benchmark suite tests the following operations:
 
 1. **Table Creation** - Creating new tables
 2. **Single Row Insert** - Inserting individual rows
@@ -32,6 +38,15 @@ The benchmark suite tests the following operations:
 16. **20k Chunked Enqueue INSERT** - End-to-end time to enqueue 20000 INSERT statements in chunks (1000 per chunk) with `Promise.all`
 17. **20k Burst Enqueue UPDATE** - End-to-end time to enqueue 20000 UPDATE statements at once with `Promise.all`, then wait for full queue digestion
 
+The standalone queue benchmark covers these in-memory workloads:
+
+1. **Queue Enqueue Only** - Measuring raw enqueue throughput
+2. **Queue Dequeue Only** - Measuring raw dequeue throughput after preloading the queue
+3. **Queue Steady-State FIFO** - Alternating enqueue/dequeue in a steady-state workload
+4. **Queue Find Tail** - Repeatedly scanning the queue to find the last item
+5. **Queue FIFO Digest** - End-to-end enqueue + dequeue workload for the custom queue
+6. **Array push/shift Digest** - Baseline comparison against a native array used as a FIFO queue
+
 ## Understanding Results
 
 The benchmark results display the following metrics for each operation:
@@ -42,7 +57,7 @@ The benchmark results display the following metrics for each operation:
 - **Total (ms)**: Total execution time for the measured run
 - **Ops/sec**: Operations per second (throughput)
 
-For fixed-workload scenarios (including 100k and 20k enqueue strategy comparisons), the benchmark is a single fixed workload rather than repeated sampling. In those rows:
+For fixed-workload scenarios (including the queue benchmark, 100k scenarios, and 20k enqueue strategy comparisons), the benchmark is a single fixed workload rather than repeated sampling. In those rows:
 
 - **Total (ms)** is the full time to digest 100000 commands
 - **Avg (ms)** is the average time per command
@@ -50,7 +65,7 @@ For fixed-workload scenarios (including 100k and 20k enqueue strategy comparison
 
 ## Customizing Benchmarks
 
-You can modify the benchmarks in `index.bench.js`:
+You can modify the SQLite benchmarks in `index.bench.js` and the queue benchmarks in `queue.bench.js`:
 
 - Change the number of iterations for each benchmark
 - Add new benchmark cases
