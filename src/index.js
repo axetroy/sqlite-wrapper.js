@@ -3,7 +3,7 @@ import { EOL } from "node:os";
 import { performance } from "node:perf_hooks";
 import { END_SIGNAL, END_MARKERS } from "./constants.js";
 import { Queue } from "./queue.js";
-import { interpolateSQL } from "./utils.js";
+import { interpolateSQL, normalizeSQL } from "./utils.js";
 export { escapeValue, interpolateSQL } from "./utils.js";
 
 const DEFAULT_MAX_IN_FLIGHT = 128;
@@ -126,7 +126,6 @@ export class SQLiteWrapper {
 					this.#emitTiming(task, "rejected");
 					reject(...args);
 				},
-				isRaw: false,
 			};
 
 			this.queue.enqueue(task);
@@ -135,37 +134,47 @@ export class SQLiteWrapper {
 	}
 
 	#pumpQueue() {
-		if (this.#closed || this.#isWaitingDrain) return;
-		if (this.#queryInFlight > 0) return;
-		if (this.queue.isEmpty()) return;
-		if (this.#inflight.length > 0 && this.queue.peek()?.isQuery) return;
+		if (this.#closed || this.#isWaitingDrain || this.#queryInFlight > 0) return;
 
-		let payload = "";
+		const queue = this.queue;
+		if (queue.isEmpty()) return;
 
-		while (!this.queue.isEmpty() && this.#inflight.length < this.#maxInFlight && payload.length < this.#maxBatchChars) {
-			const nextTask = this.queue.peek();
+		const inflight = this.#inflight;
+		if (inflight.length > 0 && queue.peek()?.isQuery) return;
+
+		const payloadParts = [];
+		let payloadChars = 0;
+		let inflightCount = inflight.length;
+
+		while (!queue.isEmpty() && inflightCount < this.#maxInFlight && payloadChars < this.#maxBatchChars) {
+			const nextTask = queue.peek();
 			if (!nextTask) break;
+			if (nextTask.isQuery && inflightCount > 0) break;
 
-			if (nextTask.isQuery && this.#inflight.length > 0) break;
-
-			const task = this.queue.dequeue();
-			const { sql, isRaw } = task;
-			const statement = isRaw ? sql : sql.trim().replace(/;*$/, ";");
+			const task = queue.dequeue();
+			const statement = normalizeSQL(task.sql);
 
 			this.#logger?.debug?.("Queue SQL for execution:", statement);
 			task.dispatchedAt = this.#now();
-			this.#inflight.push(task);
-			if (task.isQuery) this.#queryInFlight++;
-			payload += statement + EOL + END_SIGNAL;
+			inflight.push(task);
+			inflightCount++;
+
+			if (task.isQuery) {
+				this.#queryInFlight++;
+			}
+
+			payloadParts.push(statement, END_SIGNAL);
+			payloadChars += statement.length + END_SIGNAL.length + EOL.length;
 
 			if (task.isQuery) break;
 		}
 
-		if (!payload) return;
+		if (payloadParts.length === 0) return;
+
+		const payload = payloadParts.join(EOL) + EOL;
 
 		try {
-			const canContinueWrite = this.#proc.stdin.write(payload);
-			if (!canContinueWrite) {
+			if (!this.#proc.stdin.write(payload)) {
 				this.#isWaitingDrain = true;
 			}
 		} catch (error) {

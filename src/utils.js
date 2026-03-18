@@ -138,3 +138,9 @@ export function interpolateSQL(sql, params) {
 
 	return interpolated;
 }
+
+const regexWhitespace = /\s+/g;
+const regexTrimSemicolons = /;*$/;
+export function normalizeSQL(sql) {
+	return sql.trim().replace(regexWhitespace, " ").replace(regexTrimSemicolons, ";");
+}

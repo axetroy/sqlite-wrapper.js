@@ -10,3 +10,9 @@ export declare function escapeValue(value: any): string;
  * @param params
  */
 export declare function interpolateSQL(sql: string, params: any[]): string;
+
+/**
+ * Normalize SQL by trimming whitespace and collapsing multiple spaces into one.
+ * @param sql
+ */
+export declare function normalizeSQL(sql: string): string;
