@@ -218,6 +218,42 @@ describe("SQLiteWrapper", () => {
 			["rejected", "rejected"],
 		);
 	});
+
+	test("emits onTiming callback with queue/run/total metrics", async () => {
+		sqlite.close();
+
+		const timings = [];
+		const measuredSQLite = new SQLiteWrapper(SQLite3BinaryFile, {
+			onTiming: (timing) => timings.push(timing),
+		});
+
+		await measuredSQLite.exec("CREATE TABLE IF NOT EXISTS timing_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+
+		const settled = await Promise.allSettled([
+			measuredSQLite.exec("INSERT INTO timing_users (name) VALUES (?)", ["Alice"]),
+			measuredSQLite.query("SELECT * FROM missing_timing_table"),
+		]);
+
+		assert.equal(settled[0].status, "fulfilled");
+		assert.equal(settled[1].status, "rejected");
+		assert.ok(timings.length >= 3);
+
+		for (const timing of timings) {
+			assert.equal(typeof timing.sql, "string");
+			assert.equal(typeof timing.isQuery, "boolean");
+			assert.ok(timing.status === "fulfilled" || timing.status === "rejected");
+			assert.equal(typeof timing.queueMs, "number");
+			assert.equal(typeof timing.runMs, "number");
+			assert.equal(typeof timing.totalMs, "number");
+			assert.ok(timing.queueMs >= 0);
+			assert.ok(timing.runMs >= 0);
+			assert.ok(timing.totalMs >= 0);
+			assert.equal(timing.totalMs, timing.queueMs + timing.runMs);
+		}
+
+		assert.ok(timings.some((timing) => timing.status === "rejected"));
+		measuredSQLite.close();
+	});
 });
 
 describe("Error handling", () => {

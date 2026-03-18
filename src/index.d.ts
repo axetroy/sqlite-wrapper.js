@@ -25,9 +25,19 @@ export interface Logger {
 	debug(...messages: unknown[]): void;
 }
 
+export interface SQLiteWrapperTiming {
+	sql: string;
+	isQuery: boolean;
+	status: "fulfilled" | "rejected";
+	queueMs: number;
+	runMs: number;
+	totalMs: number;
+}
+
 export interface SQLiteWrapperOptions {
 	dbPath?: string;
 	logger?: Logger;
+	onTiming?: (timing: SQLiteWrapperTiming) => void;
 }
 
 export declare class SQLiteWrapper implements Disposable {
@@ -42,6 +52,7 @@ export declare class SQLiteWrapper implements Disposable {
 	 * @param options Options for the SQLite wrapper
 	 * @param options.dbPath Path to the SQLite database file
 	 * @param options.logger Logger instance for logging
+	 * @param options.onTiming Callback for per-SQL timing metrics
 	 */
 	constructor(exePath: string, options?: SQLiteWrapperOptions);
 

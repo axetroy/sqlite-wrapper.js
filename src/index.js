@@ -20,9 +20,11 @@ export class SQLiteWrapper {
 	#maxBatchChars = 128 * 1024;
 	#proc;
 	#logger;
+	#onTiming;
 
-	constructor(sqlite3ExePath, { dbPath, logger } = {}) {
+	constructor(sqlite3ExePath, { dbPath, logger, onTiming } = {}) {
 		this.#logger = logger;
+		this.#onTiming = onTiming;
 		this.#initProcess(sqlite3ExePath, dbPath);
 	}
 
@@ -104,24 +106,24 @@ export class SQLiteWrapper {
 		const formatted = params.length === 0 && !sql.includes("?") ? sql : interpolateSQL(sql, params);
 
 		return new Promise((resolve, reject) => {
-			const startTime = Date.now();
-			const end = () => {
-				this.#logger?.debug?.("SQL execution completed in ", Date.now() - startTime, "ms");
-			};
-
-			this.queue.enqueue({
+			const task = {
 				sql: formatted,
 				isQuery,
+				enqueuedAt: Date.now(),
+				dispatchedAt: 0,
+				timingEmitted: false,
 				resolve: (...args) => {
-					end();
+					this.#emitTiming(task, "fulfilled");
 					resolve(...args);
 				},
 				reject: (...args) => {
-					end();
+					this.#emitTiming(task, "rejected");
 					reject(...args);
 				},
 				isRaw: false,
-			});
+			};
+
+			this.queue.enqueue(task);
 			this.#pumpQueue();
 		});
 	}
@@ -145,6 +147,7 @@ export class SQLiteWrapper {
 			const statement = isRaw ? sql : sql.trim().replace(/;*$/, ";");
 
 			this.#logger?.debug?.("Queue SQL for execution:", statement);
+			task.dispatchedAt = Date.now();
 			this.#inflight.push(task);
 			if (task.isQuery) this.#queryInFlight++;
 			payload += statement + EOL + END_SIGNAL;
@@ -280,6 +283,28 @@ export class SQLiteWrapper {
 		this.#rejectPending(new Error("sqlite3 process error: " + error.message, { cause: error }));
 		this.#proc?.stdin?.end();
 		this.#proc?.kill();
+	}
+
+	#emitTiming(task, status) {
+		if (task.timingEmitted) return;
+		task.timingEmitted = true;
+
+		const finishedAt = Date.now();
+		const dispatchedAt = task.dispatchedAt || finishedAt;
+		const queueMs = Math.max(0, dispatchedAt - task.enqueuedAt);
+		const runMs = Math.max(0, finishedAt - dispatchedAt);
+		const totalMs = Math.max(0, finishedAt - task.enqueuedAt);
+
+		this.#logger?.debug?.("SQL execution completed in", totalMs, "ms (queue:", queueMs, "ms, run:", runMs, "ms)");
+
+		this.#onTiming?.({
+			sql: task.sql,
+			isQuery: task.isQuery,
+			status,
+			queueMs,
+			runMs,
+			totalMs,
+		});
 	}
 
 	[Symbol.dispose]() {

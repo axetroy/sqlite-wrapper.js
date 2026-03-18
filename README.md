@@ -76,11 +76,12 @@ The main class for interacting with SQLite databases.
 new SQLiteWrapper(exePath, options?)
 ```
 
-| Parameter        | Type     | Description                                                                                 |
-| ---------------- | -------- | ------------------------------------------------------------------------------------------- |
-| `exePath`        | `string` | Path to the SQLite3 executable                                                              |
-| `options.dbPath` | `string` | (Optional) Path to the SQLite database file. If not provided, an in-memory database is used |
-| `options.logger` | `Logger` | (Optional) Logger instance for debugging                                                    |
+| Parameter          | Type               | Description                                                                                 |
+| ------------------ | ------------------ | ------------------------------------------------------------------------------------------- |
+| `exePath`          | `string`           | Path to the SQLite3 executable                                                              |
+| `options.dbPath`   | `string`           | (Optional) Path to the SQLite database file. If not provided, an in-memory database is used |
+| `options.logger`   | `Logger`           | (Optional) Logger instance for debugging                                                    |
+| `options.onTiming` | `(timing) => void` | (Optional) Per-SQL timing callback for queue/run/total metrics                              |
 
 #### Methods
 
@@ -200,6 +201,32 @@ const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", {
 	dbPath: "./mydb.sqlite",
 	logger: logger,
 });
+```
+
+### Using with Timing Callback
+
+```js
+import { SQLiteWrapper } from "sqlite-wrapper.js";
+
+const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", {
+	onTiming: (timing) => {
+		// queueMs: time spent waiting in queue before being dispatched
+		// runMs: time spent after dispatch until completion
+		// totalMs: end-to-end latency for this SQL task
+		console.log("[SQL Timing]", timing.status, {
+			sql: timing.sql,
+			isQuery: timing.isQuery,
+			queueMs: timing.queueMs,
+			runMs: timing.runMs,
+			totalMs: timing.totalMs,
+		});
+	},
+});
+
+await sqlite.exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)");
+await sqlite.exec("INSERT INTO users (name) VALUES (?)", ["Alice"]);
+
+await sqlite.close();
 ```
 
 ### TypeScript Usage
