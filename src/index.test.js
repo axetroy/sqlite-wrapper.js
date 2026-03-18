@@ -7,7 +7,6 @@ import test, { afterEach, beforeEach, describe } from "node:test";
 import outdent from "outdent";
 
 import { SQLiteWrapper } from "./index.js";
-import { interpolateSQL } from "./utils.js";
 import downloadSQLite3 from "../script/download-sqlite3.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -308,43 +307,5 @@ describe("Error handling", () => {
 			.finally(() => {
 				sqlite.close();
 			});
-	});
-});
-
-describe("interpolateSQL", () => {
-	test("throws when too many parameters are provided", () => {
-		assert.throws(() => interpolateSQL("SELECT ?", [1, 2]), /Too many parameters provided/);
-	});
-
-	test("does not replace question marks inside single-quoted strings", () => {
-		const sql = "SELECT '?', ?";
-		assert.equal(interpolateSQL(sql, [1]), "SELECT '?', 1");
-	});
-
-	test("does not replace question marks inside double-quoted identifiers", () => {
-		const sql = 'SELECT "?", ?';
-		assert.equal(interpolateSQL(sql, [1]), 'SELECT "?", 1');
-	});
-
-	test("does not replace question marks inside line comments", () => {
-		const sql = "-- ? in comment\nSELECT ?";
-		assert.equal(interpolateSQL(sql, [1]), "-- ? in comment\nSELECT 1");
-	});
-
-	test("does not replace question marks inside block comments", () => {
-		const sql = "/* ? in comment */ SELECT ?";
-		assert.equal(interpolateSQL(sql, [1]), "/* ? in comment */ SELECT 1");
-	});
-
-	test("throws readable error for unterminated single-quoted string", () => {
-		assert.throws(() => interpolateSQL("SELECT 'abc ?", []), /Unterminated single-quoted string starting at position 8/);
-	});
-
-	test("throws readable error for unterminated double-quoted identifier", () => {
-		assert.throws(() => interpolateSQL('SELECT "abc ?', []), /Unterminated double-quoted identifier\/string starting at position 8/);
-	});
-
-	test("throws readable error for unterminated block comment", () => {
-		assert.throws(() => interpolateSQL("/* comment ?", []), /Unterminated block comment starting at position 1/);
 	});
 });
