@@ -38,6 +38,8 @@ export interface SQLiteWrapperOptions {
 	dbPath?: string;
 	logger?: Logger;
 	onTiming?: (timing: SQLiteWrapperTiming) => void;
+	maxInFlight?: number;
+	maxBatchChars?: number;
 }
 
 export declare class SQLiteWrapper implements Disposable {
@@ -53,6 +55,8 @@ export declare class SQLiteWrapper implements Disposable {
 	 * @param options.dbPath Path to the SQLite database file
 	 * @param options.logger Logger instance for logging
 	 * @param options.onTiming Callback for per-SQL timing metrics
+	 * @param options.maxInFlight Maximum number of inflight statements in one dispatch cycle
+	 * @param options.maxBatchChars Maximum SQL payload size (characters) per write
 	 */
 	constructor(exePath: string, options?: SQLiteWrapperOptions);
 

@@ -219,6 +219,31 @@ describe("SQLiteWrapper", () => {
 		);
 	});
 
+	test("accepts custom queue tuning options", async () => {
+		sqlite.close();
+
+		const tuned = new SQLiteWrapper(SQLite3BinaryFile, {
+			maxInFlight: 16,
+			maxBatchChars: 8 * 1024,
+		});
+
+		await tuned.exec("CREATE TABLE IF NOT EXISTS tuning_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+		await tuned.exec("INSERT INTO tuning_users (name) VALUES (?)", ["Alice"]);
+
+		const rows = await tuned.query("SELECT name FROM tuning_users");
+		assert.deepEqual(rows, [{ name: "Alice" }]);
+
+		tuned.close();
+	});
+
+	test("throws for invalid queue tuning options", () => {
+		assert.throws(() => new SQLiteWrapper(SQLite3BinaryFile, { maxInFlight: 0 }), /maxInFlight must be a positive integer/);
+		assert.throws(
+			() => new SQLiteWrapper(SQLite3BinaryFile, { maxBatchChars: -1 }),
+			/maxBatchChars must be a positive integer/,
+		);
+	});
+
 	test("emits onTiming callback with queue/run/total metrics", async () => {
 		sqlite.close();
 

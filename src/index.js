@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process";
 import { EOL } from "node:os";
+import { performance } from "node:perf_hooks";
 import { END_SIGNAL, END_MARKERS } from "./constants.js";
 import { Queue } from "./queue.js";
 import { interpolateSQL } from "./utils.js";
 export { escapeValue, interpolateSQL } from "./utils.js";
+
+const DEFAULT_MAX_IN_FLIGHT = 128;
+const DEFAULT_MAX_BATCH_CHARS = 128 * 1024;
 
 export class SQLiteWrapper {
 	queue = new Queue();
@@ -16,15 +20,17 @@ export class SQLiteWrapper {
 	#isWaitingDrain = false;
 	#isFinalizeScheduled = false;
 	#queryInFlight = 0;
-	#maxInFlight = 128;
-	#maxBatchChars = 128 * 1024;
+	#maxInFlight = DEFAULT_MAX_IN_FLIGHT;
+	#maxBatchChars = DEFAULT_MAX_BATCH_CHARS;
 	#proc;
 	#logger;
 	#onTiming;
 
-	constructor(sqlite3ExePath, { dbPath, logger, onTiming } = {}) {
+	constructor(sqlite3ExePath, { dbPath, logger, onTiming, maxInFlight, maxBatchChars } = {}) {
 		this.#logger = logger;
 		this.#onTiming = onTiming;
+		this.#maxInFlight = this.#normalizePositiveInteger(maxInFlight, DEFAULT_MAX_IN_FLIGHT, "maxInFlight");
+		this.#maxBatchChars = this.#normalizePositiveInteger(maxBatchChars, DEFAULT_MAX_BATCH_CHARS, "maxBatchChars");
 		this.#initProcess(sqlite3ExePath, dbPath);
 	}
 
@@ -109,7 +115,7 @@ export class SQLiteWrapper {
 			const task = {
 				sql: formatted,
 				isQuery,
-				enqueuedAt: Date.now(),
+				enqueuedAt: this.#now(),
 				dispatchedAt: 0,
 				timingEmitted: false,
 				resolve: (...args) => {
@@ -147,7 +153,7 @@ export class SQLiteWrapper {
 			const statement = isRaw ? sql : sql.trim().replace(/;*$/, ";");
 
 			this.#logger?.debug?.("Queue SQL for execution:", statement);
-			task.dispatchedAt = Date.now();
+			task.dispatchedAt = this.#now();
 			this.#inflight.push(task);
 			if (task.isQuery) this.#queryInFlight++;
 			payload += statement + EOL + END_SIGNAL;
@@ -289,11 +295,11 @@ export class SQLiteWrapper {
 		if (task.timingEmitted) return;
 		task.timingEmitted = true;
 
-		const finishedAt = Date.now();
+		const finishedAt = this.#now();
 		const dispatchedAt = task.dispatchedAt || finishedAt;
-		const queueMs = Math.max(0, dispatchedAt - task.enqueuedAt);
-		const runMs = Math.max(0, finishedAt - dispatchedAt);
-		const totalMs = Math.max(0, finishedAt - task.enqueuedAt);
+		const queueMs = Math.max(0, Math.round(dispatchedAt - task.enqueuedAt));
+		const runMs = Math.max(0, Math.round(finishedAt - dispatchedAt));
+		const totalMs = queueMs + runMs;
 
 		this.#logger?.debug?.("SQL execution completed in", totalMs, "ms (queue:", queueMs, "ms, run:", runMs, "ms)");
 
@@ -305,6 +311,19 @@ export class SQLiteWrapper {
 			runMs,
 			totalMs,
 		});
+	}
+
+	#now() {
+		return performance.now();
+	}
+
+	#normalizePositiveInteger(value, fallback, name) {
+		if (value === undefined) return fallback;
+		if (!Number.isInteger(value) || value <= 0) {
+			throw new TypeError(`${name} must be a positive integer`);
+		}
+
+		return value;
 	}
 
 	[Symbol.dispose]() {

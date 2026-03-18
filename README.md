@@ -82,6 +82,8 @@ new SQLiteWrapper(exePath, options?)
 | `options.dbPath`   | `string`           | (Optional) Path to the SQLite database file. If not provided, an in-memory database is used |
 | `options.logger`   | `Logger`           | (Optional) Logger instance for debugging                                                    |
 | `options.onTiming` | `(timing) => void` | (Optional) Per-SQL timing callback for queue/run/total metrics                              |
+| `options.maxInFlight` | `number`        | (Optional, default `128`) Max inflight statements per dispatch cycle                        |
+| `options.maxBatchChars` | `number`      | (Optional, default `131072`) Max SQL payload size per process write                         |
 
 #### Methods
 
@@ -229,6 +231,20 @@ await sqlite.exec("INSERT INTO users (name) VALUES (?)", ["Alice"]);
 await sqlite.close();
 ```
 
+### Performance Tuning Options
+
+```js
+import { SQLiteWrapper } from "sqlite-wrapper.js";
+
+const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", {
+	dbPath: "./mydb.sqlite",
+	maxInFlight: 256,
+	maxBatchChars: 256 * 1024,
+});
+```
+
+Use higher values only after benchmark validation in your workload.
+
 ### TypeScript Usage
 
 ```typescript
@@ -313,6 +329,33 @@ npm run benchmark
 ```
 
 This will test various operations including table creation, inserts, queries, updates, deletes, and JOIN operations. See the [benchmark directory](./benchmark/README.md) for more details.
+
+## Project Structure
+
+```text
+src/         Core runtime implementation and public types
+benchmark/   Performance benchmark suites
+test/        Distribution-level integration tests
+script/      Utility scripts (for example sqlite binary download)
+fixtures/    CJS/ESM fixtures for packaging tests
+bin/         Downloaded sqlite binaries for local test/benchmark
+dist/        Build outputs
+```
+
+## Naming and Maintenance Conventions
+
+- Keep public API surface in `src/index.js` and corresponding declarations in `src/index.d.ts`.
+- Keep internal queue logic isolated in `src/queue.js`.
+- Use `node:` protocol imports for built-in modules.
+- Prefer explicit option objects over positional boolean arguments.
+- Add tests for behavior changes in `src/index.test.js` before refactoring internals.
+
+## Performance Best Practices
+
+- Prefer transaction-wrapped write batches for heavy write workloads.
+- Add proper indexes for `UPDATE` and `WHERE` filters.
+- Use `onTiming` to distinguish queue pressure from execution bottlenecks.
+- Tune `maxInFlight` and `maxBatchChars` with benchmark data, not guesses.
 
 <details><summary>Apple M3 Pro Benchmark Results</summary>
 
