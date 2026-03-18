@@ -1,74 +1,53 @@
-class QueueNode {
-	constructor(value) {
-		this.value = value;
-		this.next = null;
-	}
-}
+const COMPACT_THRESHOLD = 1024;
 
 export class Queue {
-	#head = null;
-	#tail = null;
-	#size = 0;
+	#items = [];
+	#head = 0;
 
 	enqueue(value) {
-		const node = new QueueNode(value);
-
-		if (this.#tail) {
-			this.#tail.next = node;
-		} else {
-			this.#head = node;
-		}
-
-		this.#tail = node;
-		this.#size++;
+		this.#items.push(value);
 	}
 
 	dequeue() {
-		if (!this.#head) return null;
+		if (this.#head >= this.#items.length) return null;
 
-		const node = this.#head;
-		this.#head = node.next;
+		const value = this.#items[this.#head++];
 
-		if (!this.#head) {
-			this.#tail = null;
+		if (this.#head >= COMPACT_THRESHOLD && this.#head * 2 >= this.#items.length) {
+			this.#items = this.#items.slice(this.#head);
+			this.#head = 0;
 		}
 
-		this.#size--;
-		return node.value;
+		return value;
 	}
 
 	clear() {
-		this.#head = null;
-		this.#tail = null;
-		this.#size = 0;
+		this.#items = [];
+		this.#head = 0;
 	}
 
 	find(predicate) {
-		let current = this.#head;
-
-		while (current) {
-			if (predicate(current.value)) return current.value;
-			current = current.next;
+		for (let i = this.#head; i < this.#items.length; i++) {
+			const value = this.#items[i];
+			if (predicate(value)) return value;
 		}
 
 		return null;
 	}
 
 	toArray() {
-		return Array.from(this.values());
+		if (this.#head === 0) return [...this.#items];
+		return this.#items.slice(this.#head);
 	}
 
 	*values() {
-		let current = this.#head;
-
-		while (current) {
-			yield current.value;
-			current = current.next;
+		for (let i = this.#head; i < this.#items.length; i++) {
+			yield this.#items[i];
 		}
 	}
 
 	peek() {
-		return this.#head ? this.#head.value : null;
+		return this.#head < this.#items.length ? this.#items[this.#head] : null;
 	}
 
 	[Symbol.iterator]() {
@@ -76,10 +55,10 @@ export class Queue {
 	}
 
 	get size() {
-		return this.#size;
+		return this.#items.length - this.#head;
 	}
 
 	isEmpty() {
-		return this.#size === 0;
+		return this.#head >= this.#items.length;
 	}
 }
