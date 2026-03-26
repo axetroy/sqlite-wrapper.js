@@ -6,6 +6,18 @@ import { Queue } from "./queue.js";
 import { interpolateSQL, normalizeSQL } from "./utils.js";
 export { escapeValue, interpolateSQL } from "./utils.js";
 
+export class AbortError extends Error {
+	constructor(message = "This operation was aborted", reason = undefined) {
+		super(message);
+		this.name = "AbortError";
+		this.reason = reason;
+	}
+
+	static is(err) {
+		return err instanceof AbortError || (err != null && err.name === "AbortError");
+	}
+}
+
 const DEFAULT_MAX_IN_FLIGHT = 128;
 const DEFAULT_MAX_BATCH_CHARS = 128 * 1024;
 
@@ -80,12 +92,12 @@ export class SQLiteWrapper {
 		return this.queue.size + this.#inflight.length;
 	}
 
-	async exec(sql, params = []) {
-		return this.#enqueueSQL(sql, params, { isQuery: false });
+	async exec(sql, params = [], options = {}) {
+		return this.#enqueueSQL(sql, params, { isQuery: false, signal: options?.signal });
 	}
 
-	async query(sql, params = []) {
-		const raw = await this.#enqueueSQL(sql, params, { isQuery: true });
+	async query(sql, params = [], options = {}) {
+		const raw = await this.#enqueueSQL(sql, params, { isQuery: true, signal: options?.signal });
 		if (!raw.trim()) return [];
 
 		try {
@@ -99,19 +111,25 @@ export class SQLiteWrapper {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#rejectPending(new Error("SQLiteWrapper is closed"));
-		this.#proc?.stdin?.end();
+		this.#proc?.stdin?.destroy();
 		this.#proc?.kill();
 	}
 
 	// ----------------------------
 	// 队列系统
 	// ----------------------------
-	#enqueueSQL(sql, params, { isQuery }) {
+	#enqueueSQL(sql, params, { isQuery, signal }) {
 		if (this.#closed) return Promise.reject(new Error("Cannot enqueue SQL on closed SQLiteWrapper"));
+
+		if (signal?.aborted) {
+			return Promise.reject(new AbortError(undefined, signal.reason));
+		}
 
 		const formatted = params.length === 0 && !sql.includes("?") ? sql : interpolateSQL(sql, params);
 
 		return new Promise((resolve, reject) => {
+			let abortHandler = null;
+
 			const task = {
 				sql: formatted,
 				isQuery,
@@ -119,14 +137,26 @@ export class SQLiteWrapper {
 				dispatchedAt: 0,
 				timingEmitted: false,
 				resolve: (...args) => {
+					if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
 					this.#emitTiming(task, "fulfilled");
 					resolve(...args);
 				},
 				reject: (...args) => {
+					if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
 					this.#emitTiming(task, "rejected");
 					reject(...args);
 				},
 			};
+
+			if (signal) {
+				abortHandler = () => {
+					if (task.dispatchedAt === 0) {
+						this.queue.remove(task);
+						task.reject(new AbortError(undefined, signal.reason));
+					}
+				};
+				signal.addEventListener("abort", abortHandler, { once: true });
+			}
 
 			this.queue.enqueue(task);
 			this.#pumpQueue();
@@ -296,7 +326,7 @@ export class SQLiteWrapper {
 
 		this.#closed = true;
 		this.#rejectPending(new Error("sqlite3 process error: " + error.message, { cause: error }));
-		this.#proc?.stdin?.end();
+		this.#proc?.stdin?.destroy();
 		this.#proc?.kill();
 	}
 
@@ -336,7 +366,6 @@ export class SQLiteWrapper {
 	}
 
 	[Symbol.dispose]() {
-		this.queue.clear();
 		this.close();
 	}
 }

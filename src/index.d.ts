@@ -13,6 +13,18 @@ export declare function escapeValue(value: any): string;
  */
 export declare function interpolateSQL(sql: string, params: any[]): string;
 
+export declare class AbortError extends Error {
+	readonly name: "AbortError";
+	/** The reason provided to `AbortController.abort(reason)`, if any. */
+	readonly reason: unknown;
+	constructor(message?: string, reason?: unknown);
+	/**
+	 * Returns true if the given value is an AbortError (either an instance of
+	 * AbortError or any error whose `.name` is "AbortError").
+	 */
+	static is(err: unknown): err is AbortError;
+}
+
 export interface Logger {
 	log(...messages: unknown[]): void;
 
@@ -40,6 +52,10 @@ export interface SQLiteWrapperOptions {
 	onTiming?: (timing: SQLiteWrapperTiming) => void;
 	maxInFlight?: number;
 	maxBatchChars?: number;
+}
+
+export interface SQLiteOperationOptions {
+	signal?: AbortSignal;
 }
 
 export declare class SQLiteWrapper implements Disposable {
@@ -70,15 +86,19 @@ export declare class SQLiteWrapper implements Disposable {
 	 * Executes a SQL query.
 	 * @param sql SQL query to execute
 	 * @param params Query parameters
+	 * @param options Operation options
+	 * @param options.signal AbortSignal to cancel the operation before it is dispatched
 	 */
-	exec(sql: string, params?: any[]): Promise<void>;
+	exec(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<void>;
 
 	/**
 	 * Executes a SQL query and returns the result.
 	 * @param sql SQL query to execute
 	 * @param params Query parameters
+	 * @param options Operation options
+	 * @param options.signal AbortSignal to cancel the operation before it is dispatched
 	 */
-	query<T = any>(sql: string, params?: any[]): Promise<T[]>;
+	query<T = any>(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<T[]>;
 
 	/**
 	 * Closes the SQLite connection (Process).

@@ -6,7 +6,7 @@ import test, { afterEach, beforeEach, describe } from "node:test";
 
 import outdent from "outdent";
 
-import { SQLiteWrapper } from "./index.js";
+import { SQLiteWrapper, AbortError } from "./index.js";
 import downloadSQLite3 from "../script/download-sqlite3.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -218,6 +218,25 @@ describe("SQLiteWrapper", () => {
 		);
 	});
 
+	test("[Symbol.dispose] rejects queued tasks rather than silently dropping them", async () => {
+		// Enqueue a query to occupy the process, then queue a second exec that stays in the queue
+		const firstPromise = sqlite.query("SELECT 1");
+		const secondPromise = sqlite.exec("SELECT 2");
+
+		// Dispose while both are pending
+		sqlite[Symbol.dispose]();
+
+		const settled = await Promise.race([
+			Promise.allSettled([firstPromise, secondPromise]),
+			new Promise((_, reject) => setTimeout(() => reject(new Error("Timed out — queued promise was never settled")), 1000)),
+		]);
+
+		assert.deepEqual(
+			settled.map((item) => item.status),
+			["rejected", "rejected"],
+		);
+	});
+
 	test("accepts custom queue tuning options", async () => {
 		sqlite.close();
 
@@ -277,6 +296,141 @@ describe("SQLiteWrapper", () => {
 
 		assert.ok(timings.some((timing) => timing.status === "rejected"));
 		measuredSQLite.close();
+	});
+});
+
+describe("AbortSignal support", () => {
+	test("exec rejects immediately when signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+
+		await assert.rejects(sqlite.exec("SELECT 1;", [], { signal: controller.signal }), (err) => {
+			assert.equal(err.name, "AbortError");
+			assert.ok(AbortError.is(err));
+			assert.ok(err instanceof AbortError);
+			return true;
+		});
+	});
+
+	test("query rejects immediately when signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+
+		await assert.rejects(sqlite.query("SELECT 1;", [], { signal: controller.signal }), (err) => {
+			assert.equal(err.name, "AbortError");
+			assert.ok(AbortError.is(err));
+			assert.ok(err instanceof AbortError);
+			return true;
+		});
+	});
+
+	test("exec rejects with AbortError when signal fires while task is queued", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS abort_exec_test (id INTEGER PRIMARY KEY, name TEXT)");
+
+		const controller = new AbortController();
+
+		// Start a query to set queryInFlight > 0, which blocks exec from being dispatched
+		const queryPromise = sqlite.query("SELECT 1");
+
+		// Enqueue exec with signal — stays in queue because queryInFlight > 0
+		const execPromise = sqlite.exec("INSERT INTO abort_exec_test (name) VALUES ('x')", [], {
+			signal: controller.signal,
+		});
+
+		// Abort before exec is dispatched
+		controller.abort();
+
+		// Use allSettled so both rejections are handled without triggering unhandledRejection
+		const [queryResult, execResult] = await Promise.allSettled([queryPromise, execPromise]);
+
+		// Query must still complete normally
+		assert.equal(queryResult.status, "fulfilled");
+
+		// Exec should have been cancelled
+		assert.equal(execResult.status, "rejected");
+		assert.equal(execResult.reason.name, "AbortError");
+		assert.ok(AbortError.is(execResult.reason));
+
+		// Nothing should have been inserted
+		const rows = await sqlite.query("SELECT * FROM abort_exec_test");
+		assert.deepEqual(rows, []);
+	});
+
+	test("query rejects with AbortError when signal fires while task is queued", async () => {
+		const controller = new AbortController();
+
+		// Start a query to set queryInFlight > 0, blocking the next query
+		const firstQueryPromise = sqlite.query("SELECT 1");
+
+		// Enqueue second query with signal — stays in queue because queryInFlight > 0
+		const secondQueryPromise = sqlite.query("SELECT 2", [], { signal: controller.signal });
+
+		// Abort before second query is dispatched
+		controller.abort();
+
+		// Use allSettled so both rejections are handled without triggering unhandledRejection
+		const [firstResult, secondResult] = await Promise.allSettled([firstQueryPromise, secondQueryPromise]);
+
+		// First query must still complete normally
+		assert.equal(firstResult.status, "fulfilled");
+
+		// Second query should have been cancelled
+		assert.equal(secondResult.status, "rejected");
+		assert.equal(secondResult.reason.name, "AbortError");
+		assert.ok(AbortError.is(secondResult.reason));
+	});
+
+	test("aborting after dispatch does not cancel an in-flight exec", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS abort_inflight_test (id INTEGER PRIMARY KEY, name TEXT)");
+
+		const controller = new AbortController();
+
+		// Exec is dispatched immediately (no other tasks blocking it)
+		const execPromise = sqlite.exec("INSERT INTO abort_inflight_test (name) VALUES ('y')", [], {
+			signal: controller.signal,
+		});
+
+		// Abort after dispatch — should be a no-op
+		controller.abort();
+
+		// Exec should still complete
+		await execPromise;
+
+		const rows = await sqlite.query("SELECT * FROM abort_inflight_test");
+		assert.deepEqual(rows, [{ id: 1, name: "y" }]);
+	});
+
+	test("AbortError carries the reason from controller.abort(reason) when pre-aborted", async () => {
+		const controller = new AbortController();
+		const customReason = new Error("user cancelled");
+		controller.abort(customReason);
+
+		await assert.rejects(sqlite.exec("SELECT 1;", [], { signal: controller.signal }), (err) => {
+			assert.ok(err instanceof AbortError);
+			assert.strictEqual(err.reason, customReason);
+			return true;
+		});
+	});
+
+	test("AbortError carries the reason from controller.abort(reason) when aborted while queued", async () => {
+		const controller = new AbortController();
+		const customReason = "custom string reason";
+
+		// Start a query to block the queue
+		const firstQueryPromise = sqlite.query("SELECT 1");
+
+		// Enqueue a second query with signal — stays queued
+		const secondQueryPromise = sqlite.query("SELECT 2", [], { signal: controller.signal });
+
+		// Abort with a custom reason
+		controller.abort(customReason);
+
+		const [firstResult, secondResult] = await Promise.allSettled([firstQueryPromise, secondQueryPromise]);
+
+		assert.equal(firstResult.status, "fulfilled");
+		assert.equal(secondResult.status, "rejected");
+		assert.ok(secondResult.reason instanceof AbortError);
+		assert.strictEqual(secondResult.reason.reason, customReason);
 	});
 });
 
