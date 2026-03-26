@@ -280,6 +280,102 @@ describe("SQLiteWrapper", () => {
 	});
 });
 
+describe("AbortSignal support", () => {
+	test("exec rejects immediately when signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+
+		await assert.rejects(sqlite.exec("SELECT 1;", [], { signal: controller.signal }), (err) => {
+			assert.equal(err.name, "AbortError");
+			return true;
+		});
+	});
+
+	test("query rejects immediately when signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+
+		await assert.rejects(sqlite.query("SELECT 1;", [], { signal: controller.signal }), (err) => {
+			assert.equal(err.name, "AbortError");
+			return true;
+		});
+	});
+
+	test("exec rejects with AbortError when signal fires while task is queued", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS abort_exec_test (id INTEGER PRIMARY KEY, name TEXT)");
+
+		const controller = new AbortController();
+
+		// Start a query to set queryInFlight > 0, which blocks exec from being dispatched
+		const queryPromise = sqlite.query("SELECT 1");
+
+		// Enqueue exec with signal — stays in queue because queryInFlight > 0
+		const execPromise = sqlite.exec("INSERT INTO abort_exec_test (name) VALUES ('x')", [], {
+			signal: controller.signal,
+		});
+
+		// Abort before exec is dispatched
+		controller.abort();
+
+		// Use allSettled so both rejections are handled without triggering unhandledRejection
+		const [queryResult, execResult] = await Promise.allSettled([queryPromise, execPromise]);
+
+		// Query must still complete normally
+		assert.equal(queryResult.status, "fulfilled");
+
+		// Exec should have been cancelled
+		assert.equal(execResult.status, "rejected");
+		assert.equal(execResult.reason.name, "AbortError");
+
+		// Nothing should have been inserted
+		const rows = await sqlite.query("SELECT * FROM abort_exec_test");
+		assert.deepEqual(rows, []);
+	});
+
+	test("query rejects with AbortError when signal fires while task is queued", async () => {
+		const controller = new AbortController();
+
+		// Start a query to set queryInFlight > 0, blocking the next query
+		const firstQueryPromise = sqlite.query("SELECT 1");
+
+		// Enqueue second query with signal — stays in queue because queryInFlight > 0
+		const secondQueryPromise = sqlite.query("SELECT 2", [], { signal: controller.signal });
+
+		// Abort before second query is dispatched
+		controller.abort();
+
+		// Use allSettled so both rejections are handled without triggering unhandledRejection
+		const [firstResult, secondResult] = await Promise.allSettled([firstQueryPromise, secondQueryPromise]);
+
+		// First query must still complete normally
+		assert.equal(firstResult.status, "fulfilled");
+
+		// Second query should have been cancelled
+		assert.equal(secondResult.status, "rejected");
+		assert.equal(secondResult.reason.name, "AbortError");
+	});
+
+	test("aborting after dispatch does not cancel an in-flight exec", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS abort_inflight_test (id INTEGER PRIMARY KEY, name TEXT)");
+
+		const controller = new AbortController();
+
+		// Exec is dispatched immediately (no other tasks blocking it)
+		const execPromise = sqlite.exec("INSERT INTO abort_inflight_test (name) VALUES ('y')", [], {
+			signal: controller.signal,
+		});
+
+		// Abort after dispatch — should be a no-op
+		controller.abort();
+
+		// Exec should still complete
+		await execPromise;
+
+		const rows = await sqlite.query("SELECT * FROM abort_inflight_test");
+		assert.deepEqual(rows, [{ id: 1, name: "y" }]);
+	});
+});
+
 describe("Error handling", () => {
 	test("If sqlite executable file is not found", async () => {
 		const sqlite = new SQLiteWrapper("/path/to/nonexistent/sqlite3");

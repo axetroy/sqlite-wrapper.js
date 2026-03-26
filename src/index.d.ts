@@ -42,6 +42,10 @@ export interface SQLiteWrapperOptions {
 	maxBatchChars?: number;
 }
 
+export interface SQLiteOperationOptions {
+	signal?: AbortSignal;
+}
+
 export declare class SQLiteWrapper implements Disposable {
 	/**
 	 * Queue for pending SQL queries
@@ -70,15 +74,19 @@ export declare class SQLiteWrapper implements Disposable {
 	 * Executes a SQL query.
 	 * @param sql SQL query to execute
 	 * @param params Query parameters
+	 * @param options Operation options
+	 * @param options.signal AbortSignal to cancel the operation before it is dispatched
 	 */
-	exec(sql: string, params?: any[]): Promise<void>;
+	exec(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<void>;
 
 	/**
 	 * Executes a SQL query and returns the result.
 	 * @param sql SQL query to execute
 	 * @param params Query parameters
+	 * @param options Operation options
+	 * @param options.signal AbortSignal to cancel the operation before it is dispatched
 	 */
-	query<T = any>(sql: string, params?: any[]): Promise<T[]>;
+	query<T = any>(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<T[]>;
 
 	/**
 	 * Closes the SQLite connection (Process).
