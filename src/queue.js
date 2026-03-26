@@ -26,6 +26,13 @@ export class Queue {
 		this.#head = 0;
 	}
 
+	remove(value) {
+		const index = this.#items.indexOf(value, this.#head);
+		if (index === -1) return false;
+		this.#items.splice(index, 1);
+		return true;
+	}
+
 	find(predicate) {
 		for (let i = this.#head; i < this.#items.length; i++) {
 			const value = this.#items[i];
