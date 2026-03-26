@@ -44,6 +44,8 @@ export class SQLiteWrapper {
 
 		this.#proc = spawn(sqlite3ExePath, args, { stdio: "pipe" });
 		this.#proc.stdin.setDefaultEncoding("utf-8");
+		this.#proc.stdout.setEncoding("utf-8");
+		this.#proc.stderr.setEncoding("utf-8");
 
 		this.#bindProcessEvents();
 	}
@@ -55,11 +57,11 @@ export class SQLiteWrapper {
 		});
 
 		this.#proc.stderr.on("data", (chunk) => {
-			this.#handleStderrChunk(chunk.toString());
+			this.#handleStderrChunk(chunk);
 		});
 
 		this.#proc.stdout.on("data", (chunk) => {
-			this.#handleStdoutChunk(chunk.toString());
+			this.#handleStdoutChunk(chunk);
 		});
 
 		this.#proc.stdin.on("drain", () => {

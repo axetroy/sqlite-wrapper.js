@@ -95,6 +95,28 @@ describe("SQLiteWrapper", () => {
 		assert.deepEqual(updatedRows, [{ id: 1, name: "Charlie" }]);
 	});
 
+	test("create table and query with Chinese characters", async () => {
+		await sqlite.exec(
+			outdent`
+				CREATE TABLE IF NOT EXISTS chinese_users (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT
+				);
+
+				INSERT INTO chinese_users (name) VALUES (?);
+				INSERT INTO chinese_users (name) VALUES (?);
+		`,
+			["张三", "李四"],
+		);
+
+		const rows = await sqlite.query("SELECT * FROM chinese_users");
+
+		assert.deepEqual(rows, [
+			{ id: 1, name: "张三" },
+			{ id: 2, name: "李四" },
+		]);
+	});
+
 	test("handles concurrent enqueued writes correctly", async () => {
 		await sqlite.exec("CREATE TABLE IF NOT EXISTS concurrent_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
 
