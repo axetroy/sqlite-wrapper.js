@@ -259,6 +259,32 @@ describe("SQLiteWrapper", () => {
 		);
 	});
 
+	test("executes SQL containing inline line comments without hanging", async () => {
+		await sqlite.exec(
+			outdent`
+				CREATE TABLE IF NOT EXISTS transfer (
+					taskId INTEGER PRIMARY KEY NOT NULL,            -- task ID
+					serverId INTEGER NOT NULL,                      -- server ID
+					accountId INTEGER NOT NULL,                     -- account ID
+					type INTEGER NOT NULL,                          -- task type
+					status INTEGER NOT NULL DEFAULT 0               -- task status
+				);
+
+				-- create indexes outside table definition
+				CREATE INDEX IF NOT EXISTS idx_transfer_server_id ON transfer (serverId);
+				CREATE INDEX IF NOT EXISTS idx_transfer_account_id ON transfer (accountId);
+			`,
+		);
+
+		await sqlite.exec(
+			"INSERT INTO transfer (taskId, serverId, accountId, type, status) VALUES (?, ?, ?, ?, ?)",
+			[1, 10, 20, 0, 0],
+		);
+
+		const rows = await sqlite.query("SELECT taskId, serverId FROM transfer WHERE taskId = ?", [1]);
+		assert.deepEqual(rows, [{ taskId: 1, serverId: 10 }]);
+	});
+
 	test("accepts custom queue tuning options", async () => {
 		sqlite.close();
 
