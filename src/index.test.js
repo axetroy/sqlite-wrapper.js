@@ -218,6 +218,25 @@ describe("SQLiteWrapper", () => {
 		);
 	});
 
+	test("[Symbol.dispose] rejects queued tasks rather than silently dropping them", async () => {
+		// Enqueue a query to occupy the process, then queue a second exec that stays in the queue
+		const firstPromise = sqlite.query("SELECT 1");
+		const secondPromise = sqlite.exec("SELECT 2");
+
+		// Dispose while both are pending
+		sqlite[Symbol.dispose]();
+
+		const settled = await Promise.race([
+			Promise.allSettled([firstPromise, secondPromise]),
+			new Promise((_, reject) => setTimeout(() => reject(new Error("Timed out — queued promise was never settled")), 1000)),
+		]);
+
+		assert.deepEqual(
+			settled.map((item) => item.status),
+			["rejected", "rejected"],
+		);
+	});
+
 	test("accepts custom queue tuning options", async () => {
 		sqlite.close();
 

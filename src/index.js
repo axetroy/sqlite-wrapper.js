@@ -366,7 +366,6 @@ export class SQLiteWrapper {
 	}
 
 	[Symbol.dispose]() {
-		this.queue.clear();
 		this.close();
 	}
 }
