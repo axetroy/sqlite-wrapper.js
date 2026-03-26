@@ -99,7 +99,7 @@ export class SQLiteWrapper {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#rejectPending(new Error("SQLiteWrapper is closed"));
-		this.#proc?.stdin?.end();
+		this.#proc?.stdin?.destroy();
 		this.#proc?.kill();
 	}
 
@@ -314,7 +314,7 @@ export class SQLiteWrapper {
 
 		this.#closed = true;
 		this.#rejectPending(new Error("sqlite3 process error: " + error.message, { cause: error }));
-		this.#proc?.stdin?.end();
+		this.#proc?.stdin?.destroy();
 		this.#proc?.kill();
 	}
 
