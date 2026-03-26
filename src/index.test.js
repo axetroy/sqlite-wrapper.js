@@ -380,6 +380,39 @@ describe("AbortSignal support", () => {
 		const rows = await sqlite.query("SELECT * FROM abort_inflight_test");
 		assert.deepEqual(rows, [{ id: 1, name: "y" }]);
 	});
+
+	test("AbortError carries the reason from controller.abort(reason) when pre-aborted", async () => {
+		const controller = new AbortController();
+		const customReason = new Error("user cancelled");
+		controller.abort(customReason);
+
+		await assert.rejects(sqlite.exec("SELECT 1;", [], { signal: controller.signal }), (err) => {
+			assert.ok(err instanceof AbortError);
+			assert.strictEqual(err.reason, customReason);
+			return true;
+		});
+	});
+
+	test("AbortError carries the reason from controller.abort(reason) when aborted while queued", async () => {
+		const controller = new AbortController();
+		const customReason = "custom string reason";
+
+		// Start a query to block the queue
+		const firstQueryPromise = sqlite.query("SELECT 1");
+
+		// Enqueue a second query with signal — stays queued
+		const secondQueryPromise = sqlite.query("SELECT 2", [], { signal: controller.signal });
+
+		// Abort with a custom reason
+		controller.abort(customReason);
+
+		const [firstResult, secondResult] = await Promise.allSettled([firstQueryPromise, secondQueryPromise]);
+
+		assert.equal(firstResult.status, "fulfilled");
+		assert.equal(secondResult.status, "rejected");
+		assert.ok(secondResult.reason instanceof AbortError);
+		assert.strictEqual(secondResult.reason.reason, customReason);
+	});
 });
 
 describe("Error handling", () => {

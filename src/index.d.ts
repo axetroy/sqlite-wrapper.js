@@ -15,7 +15,9 @@ export declare function interpolateSQL(sql: string, params: any[]): string;
 
 export declare class AbortError extends Error {
 	readonly name: "AbortError";
-	constructor(message?: string);
+	/** The reason provided to `AbortController.abort(reason)`, if any. */
+	readonly reason: unknown;
+	constructor(message?: string, reason?: unknown);
 	/**
 	 * Returns true if the given value is an AbortError (either an instance of
 	 * AbortError or any error whose `.name` is "AbortError").

@@ -7,9 +7,10 @@ import { interpolateSQL, normalizeSQL } from "./utils.js";
 export { escapeValue, interpolateSQL } from "./utils.js";
 
 export class AbortError extends Error {
-	constructor(message = "This operation was aborted") {
+	constructor(message = "This operation was aborted", reason = undefined) {
 		super(message);
 		this.name = "AbortError";
+		this.reason = reason;
 	}
 
 	static is(err) {
@@ -121,7 +122,7 @@ export class SQLiteWrapper {
 		if (this.#closed) return Promise.reject(new Error("Cannot enqueue SQL on closed SQLiteWrapper"));
 
 		if (signal?.aborted) {
-			return Promise.reject(new AbortError());
+			return Promise.reject(new AbortError(undefined, signal.reason));
 		}
 
 		const formatted = params.length === 0 && !sql.includes("?") ? sql : interpolateSQL(sql, params);
@@ -151,7 +152,7 @@ export class SQLiteWrapper {
 				abortHandler = () => {
 					if (task.dispatchedAt === 0) {
 						this.queue.remove(task);
-						task.reject(new AbortError());
+						task.reject(new AbortError(undefined, signal.reason));
 					}
 				};
 				signal.addEventListener("abort", abortHandler, { once: true });
