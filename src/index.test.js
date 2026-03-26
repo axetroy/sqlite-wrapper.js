@@ -6,7 +6,7 @@ import test, { afterEach, beforeEach, describe } from "node:test";
 
 import outdent from "outdent";
 
-import { SQLiteWrapper } from "./index.js";
+import { SQLiteWrapper, AbortError } from "./index.js";
 import downloadSQLite3 from "../script/download-sqlite3.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -287,6 +287,8 @@ describe("AbortSignal support", () => {
 
 		await assert.rejects(sqlite.exec("SELECT 1;", [], { signal: controller.signal }), (err) => {
 			assert.equal(err.name, "AbortError");
+			assert.ok(AbortError.is(err));
+			assert.ok(err instanceof AbortError);
 			return true;
 		});
 	});
@@ -297,6 +299,8 @@ describe("AbortSignal support", () => {
 
 		await assert.rejects(sqlite.query("SELECT 1;", [], { signal: controller.signal }), (err) => {
 			assert.equal(err.name, "AbortError");
+			assert.ok(AbortError.is(err));
+			assert.ok(err instanceof AbortError);
 			return true;
 		});
 	});
@@ -326,6 +330,7 @@ describe("AbortSignal support", () => {
 		// Exec should have been cancelled
 		assert.equal(execResult.status, "rejected");
 		assert.equal(execResult.reason.name, "AbortError");
+		assert.ok(AbortError.is(execResult.reason));
 
 		// Nothing should have been inserted
 		const rows = await sqlite.query("SELECT * FROM abort_exec_test");
@@ -353,6 +358,7 @@ describe("AbortSignal support", () => {
 		// Second query should have been cancelled
 		assert.equal(secondResult.status, "rejected");
 		assert.equal(secondResult.reason.name, "AbortError");
+		assert.ok(AbortError.is(secondResult.reason));
 	});
 
 	test("aborting after dispatch does not cancel an in-flight exec", async () => {

@@ -6,6 +6,17 @@ import { Queue } from "./queue.js";
 import { interpolateSQL, normalizeSQL } from "./utils.js";
 export { escapeValue, interpolateSQL } from "./utils.js";
 
+export class AbortError extends Error {
+	constructor(message = "This operation was aborted") {
+		super(message);
+		this.name = "AbortError";
+	}
+
+	static is(err) {
+		return err instanceof AbortError || (err != null && err.name === "AbortError");
+	}
+}
+
 const DEFAULT_MAX_IN_FLIGHT = 128;
 const DEFAULT_MAX_BATCH_CHARS = 128 * 1024;
 
@@ -110,7 +121,7 @@ export class SQLiteWrapper {
 		if (this.#closed) return Promise.reject(new Error("Cannot enqueue SQL on closed SQLiteWrapper"));
 
 		if (signal?.aborted) {
-			return Promise.reject(signal.reason ?? new DOMException("This operation was aborted", "AbortError"));
+			return Promise.reject(new AbortError());
 		}
 
 		const formatted = params.length === 0 && !sql.includes("?") ? sql : interpolateSQL(sql, params);
@@ -140,7 +151,7 @@ export class SQLiteWrapper {
 				abortHandler = () => {
 					if (task.dispatchedAt === 0) {
 						this.queue.remove(task);
-						task.reject(signal.reason ?? new DOMException("This operation was aborted", "AbortError"));
+						task.reject(new AbortError());
 					}
 				};
 				signal.addEventListener("abort", abortHandler, { once: true });

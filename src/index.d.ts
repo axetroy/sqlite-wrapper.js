@@ -13,6 +13,16 @@ export declare function escapeValue(value: any): string;
  */
 export declare function interpolateSQL(sql: string, params: any[]): string;
 
+export declare class AbortError extends Error {
+	readonly name: "AbortError";
+	constructor(message?: string);
+	/**
+	 * Returns true if the given value is an AbortError (either an instance of
+	 * AbortError or any error whose `.name` is "AbortError").
+	 */
+	static is(err: unknown): err is AbortError;
+}
+
 export interface Logger {
 	log(...messages: unknown[]): void;
 
