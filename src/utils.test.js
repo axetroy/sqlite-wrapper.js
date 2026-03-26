@@ -68,4 +68,31 @@ describe("normalizeSQL", () => {
 	test("keeps single-line statements normalized", () => {
 		assert.equal(normalizeSQL("SELECT 1"), "SELECT 1;");
 	});
+
+	test("strips line comments before collapsing whitespace", () => {
+		const sql = normalizeSQL(
+			"CREATE TABLE t (\n  id INTEGER, -- primary key\n  name TEXT    -- display name\n);",
+		);
+		assert.equal(sql, "CREATE TABLE t ( id INTEGER, name TEXT );");
+	});
+
+	test("does not strip -- inside single-quoted strings", () => {
+		const sql = normalizeSQL("SELECT '--not a comment'");
+		assert.equal(sql, "SELECT '--not a comment';");
+	});
+
+	test("does not strip -- inside double-quoted identifiers", () => {
+		const sql = normalizeSQL('SELECT "--not a comment"');
+		assert.equal(sql, 'SELECT "--not a comment";');
+	});
+
+	test("handles SQL with only line comments on some lines", () => {
+		const sql = normalizeSQL("-- header comment\nSELECT 1;");
+		assert.equal(sql, "SELECT 1;");
+	});
+
+	test("handles multi-statement SQL with inline line comments", () => {
+		const sql = normalizeSQL("INSERT INTO t VALUES (1); -- first row\nINSERT INTO t VALUES (2); -- second row");
+		assert.equal(sql, "INSERT INTO t VALUES (1); INSERT INTO t VALUES (2);");
+	});
 });

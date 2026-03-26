@@ -142,5 +142,62 @@ export function interpolateSQL(sql, params) {
 const regexWhitespace = /\s+/g;
 const regexTrimSemicolons = /;*$/;
 export function normalizeSQL(sql) {
-	return sql.trim().replace(regexWhitespace, " ").replace(regexTrimSemicolons, ";");
+	return stripLineComments(sql).trim().replace(regexWhitespace, " ").replace(regexTrimSemicolons, ";");
+}
+
+/**
+ * Strip SQL line comments (-- to end of line) while preserving string literals.
+ * @param {string} sql
+ * @returns {string}
+ */
+function stripLineComments(sql) {
+	let result = "";
+	let i = 0;
+
+	while (i < sql.length) {
+		const ch = sql[i];
+		const next = sql[i + 1];
+
+		if (ch === "'") {
+			// Single-quoted string: copy verbatim including escaped quotes ('')
+			let j = i + 1;
+			while (j < sql.length) {
+				if (sql[j] === "'" && sql[j + 1] === "'") {
+					j += 2;
+				} else if (sql[j] === "'") {
+					j++;
+					break;
+				} else {
+					j++;
+				}
+			}
+			result += sql.slice(i, j);
+			i = j;
+		} else if (ch === '"') {
+			// Double-quoted identifier: copy verbatim including escaped quotes ("")
+			let j = i + 1;
+			while (j < sql.length) {
+				if (sql[j] === '"' && sql[j + 1] === '"') {
+					j += 2;
+				} else if (sql[j] === '"') {
+					j++;
+					break;
+				} else {
+					j++;
+				}
+			}
+			result += sql.slice(i, j);
+			i = j;
+		} else if (ch === "-" && next === "-") {
+			// Line comment: skip everything up to (but not including) the newline
+			while (i < sql.length && sql[i] !== "\n") {
+				i++;
+			}
+		} else {
+			result += ch;
+			i++;
+		}
+	}
+
+	return result;
 }
