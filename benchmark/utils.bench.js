@@ -94,7 +94,7 @@ async function main() {
 	);
 
 	results.push(
-		await benchmarkWorkload(`escapeValue boolean (${ITERATIONS})`, ITERATIONS, async () => {
+		await benchmarkWorkload(`escapeValue boolean (${ITERATIONS * 2})`, ITERATIONS * 2, async () => {
 			for (let i = 0; i < ITERATIONS; i++) {
 				escapeValue(true);
 				escapeValue(false);
