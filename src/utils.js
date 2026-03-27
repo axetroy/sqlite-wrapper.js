@@ -7,7 +7,7 @@ export function escapeValue(value) {
 	if (typeof value === "string") return `'${value.replace(/'/g, "''")}'`;
 	if (value === null || value === undefined) return "NULL";
 	if (typeof value === "number" || typeof value === "bigint") return String(value);
-	if (typeof value === "boolean") return value.toString().toUpperCase();
+	if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
 	if (value instanceof Date) return `'${value.toISOString()}'`;
 	throw new TypeError(`Unsupported parameter type: ${typeof value}`);
 }
@@ -25,7 +25,8 @@ export function interpolateSQL(sql, params) {
 	}
 
 	let i = 0;
-	let interpolated = "";
+	const parts = [];
+	let segStart = 0;
 	let state = "normal";
 	let stateStartPos = -1;
 
@@ -37,20 +38,17 @@ export function interpolateSQL(sql, params) {
 			if (ch === "'") {
 				state = "singleQuote";
 				stateStartPos = pos;
-				interpolated += ch;
 				continue;
 			}
 
 			if (ch === '"') {
 				state = "doubleQuote";
 				stateStartPos = pos;
-				interpolated += ch;
 				continue;
 			}
 
 			if (ch === "-" && next === "-") {
 				state = "lineComment";
-				interpolated += "--";
 				pos++;
 				continue;
 			}
@@ -58,26 +56,23 @@ export function interpolateSQL(sql, params) {
 			if (ch === "/" && next === "*") {
 				state = "blockComment";
 				stateStartPos = pos;
-				interpolated += "/*";
 				pos++;
 				continue;
 			}
 
 			if (ch === "?") {
 				if (i >= params.length) throw new Error("Too few parameters provided");
-				interpolated += escapeValue(params[i++]);
+				parts.push(sql.slice(segStart, pos));
+				parts.push(escapeValue(params[i++]));
+				segStart = pos + 1;
 				continue;
 			}
 
-			interpolated += ch;
 			continue;
 		}
 
 		if (state === "singleQuote") {
-			interpolated += ch;
-
 			if (ch === "'" && next === "'") {
-				interpolated += next;
 				pos++;
 				continue;
 			}
@@ -90,10 +85,7 @@ export function interpolateSQL(sql, params) {
 		}
 
 		if (state === "doubleQuote") {
-			interpolated += ch;
-
 			if (ch === '"' && next === '"') {
-				interpolated += next;
 				pos++;
 				continue;
 			}
@@ -106,15 +98,12 @@ export function interpolateSQL(sql, params) {
 		}
 
 		if (state === "lineComment") {
-			interpolated += ch;
 			if (ch === "\n") state = "normal";
 			continue;
 		}
 
 		if (state === "blockComment") {
-			interpolated += ch;
 			if (ch === "*" && next === "/") {
-				interpolated += next;
 				pos++;
 				state = "normal";
 				stateStartPos = -1;
@@ -136,13 +125,15 @@ export function interpolateSQL(sql, params) {
 
 	if (i < params.length) throw new Error("Too many parameters provided");
 
-	return interpolated;
+	parts.push(sql.slice(segStart));
+	return parts.join("");
 }
 
 const regexWhitespace = /\s+/g;
 const regexTrimSemicolons = /;*$/;
 export function normalizeSQL(sql) {
-	return stripLineComments(sql).trim().replace(regexWhitespace, " ").replace(regexTrimSemicolons, ";");
+	const stripped = sql.includes("--") ? stripLineComments(sql) : sql;
+	return stripped.trim().replace(regexWhitespace, " ").replace(regexTrimSemicolons, ";");
 }
 
 /**
@@ -151,53 +142,53 @@ export function normalizeSQL(sql) {
  * @returns {string}
  */
 function stripLineComments(sql) {
-	let result = "";
+	const parts = [];
+	let segStart = 0;
 	let i = 0;
+	const len = sql.length;
 
-	while (i < sql.length) {
+	while (i < len) {
 		const ch = sql[i];
-		const next = sql[i + 1];
 
 		if (ch === "'") {
-			// Single-quoted string: copy verbatim including escaped quotes ('')
-			let j = i + 1;
-			while (j < sql.length) {
-				if (sql[j] === "'" && sql[j + 1] === "'") {
-					j += 2;
-				} else if (sql[j] === "'") {
-					j++;
+			// Single-quoted string: skip verbatim including escaped quotes ('')
+			i++;
+			while (i < len) {
+				if (sql[i] === "'" && sql[i + 1] === "'") {
+					i += 2;
+				} else if (sql[i] === "'") {
+					i++;
 					break;
 				} else {
-					j++;
+					i++;
 				}
 			}
-			result += sql.slice(i, j);
-			i = j;
 		} else if (ch === '"') {
-			// Double-quoted identifier: copy verbatim including escaped quotes ("")
-			let j = i + 1;
-			while (j < sql.length) {
-				if (sql[j] === '"' && sql[j + 1] === '"') {
-					j += 2;
-				} else if (sql[j] === '"') {
-					j++;
+			// Double-quoted identifier: skip verbatim including escaped quotes ("")
+			i++;
+			while (i < len) {
+				if (sql[i] === '"' && sql[i + 1] === '"') {
+					i += 2;
+				} else if (sql[i] === '"') {
+					i++;
 					break;
 				} else {
-					j++;
+					i++;
 				}
 			}
-			result += sql.slice(i, j);
-			i = j;
-		} else if (ch === "-" && next === "-") {
-			// Line comment: skip everything up to (but not including) the newline
-			while (i < sql.length && sql[i] !== "\n") {
+		} else if (ch === "-" && sql[i + 1] === "-") {
+			// Line comment: flush accumulated segment then skip to end of line
+			parts.push(sql.slice(segStart, i));
+			while (i < len && sql[i] !== "\n") {
 				i++;
 			}
+			segStart = i;
 		} else {
-			result += ch;
 			i++;
 		}
 	}
 
-	return result;
+	if (parts.length === 0) return sql;
+	parts.push(sql.slice(segStart));
+	return parts.join("");
 }

@@ -16,6 +16,12 @@ To run the standalone queue benchmark, use:
 npm run benchmark:queue
 ```
 
+To run the utils benchmark (escapeValue, interpolateSQL, normalizeSQL), use:
+
+```bash
+npm run benchmark:utils
+```
+
 ## What is Benchmarked
 
 The SQLite benchmark suite tests the following operations:
@@ -46,6 +52,21 @@ The standalone queue benchmark covers these in-memory workloads:
 4. **Queue Find Tail** - Repeatedly scanning the queue to find the last item
 5. **Queue FIFO Digest** - End-to-end enqueue + dequeue workload for the custom queue
 6. **Array push/shift Digest** - Baseline comparison against a native array used as a FIFO queue
+
+The standalone utils benchmark covers these pure-JS workloads:
+
+1. **escapeValue string** - Escaping a plain string value
+2. **escapeValue string with quotes** - Escaping a string containing single quotes
+3. **escapeValue boolean** - Escaping boolean true/false
+4. **escapeValue number** - Escaping a numeric value
+5. **interpolateSQL simple** - Single-placeholder interpolation
+6. **interpolateSQL multiple params** - Four-placeholder interpolation with mixed types
+7. **interpolateSQL no params** - Fast path for SQL without placeholders
+8. **interpolateSQL with quoted strings** - Interpolation where a literal `?` inside quotes is skipped
+9. **normalizeSQL simple** - No-op normalization of a plain SELECT
+10. **normalizeSQL with whitespace** - Collapsing excess whitespace
+11. **normalizeSQL with line comments** - Stripping a trailing line comment
+12. **normalizeSQL complex CREATE TABLE** - Multi-line CREATE TABLE with several inline comments
 
 ## Understanding Results
 
