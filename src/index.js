@@ -20,6 +20,7 @@ export class AbortError extends Error {
 
 const DEFAULT_MAX_IN_FLIGHT = 128;
 const DEFAULT_MAX_BATCH_CHARS = 128 * 1024;
+const END_PACKET_CHARS = END_SIGNAL.length + EOL.length;
 
 export class SQLiteWrapper {
 	queue = new Queue();
@@ -31,6 +32,7 @@ export class SQLiteWrapper {
 	#stderrChunkRemainder = "";
 	#isWaitingDrain = false;
 	#isFinalizeScheduled = false;
+	#isPumpScheduled = false;
 	#queryInFlight = 0;
 	#maxInFlight = DEFAULT_MAX_IN_FLIGHT;
 	#maxBatchChars = DEFAULT_MAX_BATCH_CHARS;
@@ -78,7 +80,7 @@ export class SQLiteWrapper {
 
 		this.#proc.stdin.on("drain", () => {
 			this.#isWaitingDrain = false;
-			this.#pumpQueue();
+			this.#schedulePumpQueue();
 		});
 
 		this.#proc.on("close", () => {
@@ -161,6 +163,20 @@ export class SQLiteWrapper {
 			}
 
 			this.queue.enqueue(task);
+			if (this.queue.size === 1 && this.#inflight.length === 0 && !this.#isWaitingDrain && this.#queryInFlight === 0) {
+				this.#pumpQueue();
+			} else {
+				this.#schedulePumpQueue();
+			}
+		});
+	}
+
+	#schedulePumpQueue() {
+		if (this.#closed || this.#isPumpScheduled) return;
+		this.#isPumpScheduled = true;
+
+		queueMicrotask(() => {
+			this.#isPumpScheduled = false;
 			this.#pumpQueue();
 		});
 	}
@@ -173,12 +189,15 @@ export class SQLiteWrapper {
 
 		const inflight = this.#inflight;
 		if (inflight.length > 0 && queue.peek()?.isQuery) return;
+		const maxInFlight = this.#maxInFlight;
+		const maxBatchChars = this.#maxBatchChars;
+		const debug = this.#logger?.debug;
 
 		const payloadParts = [];
 		let payloadChars = 0;
 		let inflightCount = inflight.length;
 
-		while (!queue.isEmpty() && inflightCount < this.#maxInFlight && payloadChars < this.#maxBatchChars) {
+		while (!queue.isEmpty() && inflightCount < maxInFlight && payloadChars < maxBatchChars) {
 			const nextTask = queue.peek();
 			if (!nextTask) break;
 			if (nextTask.isQuery && inflightCount > 0) break;
@@ -186,7 +205,7 @@ export class SQLiteWrapper {
 			const task = queue.dequeue();
 			const statement = normalizeSQL(task.sql);
 
-			this.#logger?.debug?.("Queue SQL for execution:", statement);
+			debug?.("Queue SQL for execution:", statement);
 			task.dispatchedAt = this.#now();
 			inflight.push(task);
 			inflightCount++;
@@ -196,7 +215,7 @@ export class SQLiteWrapper {
 			}
 
 			payloadParts.push(statement, END_SIGNAL);
-			payloadChars += statement.length + END_SIGNAL.length + EOL.length;
+			payloadChars += statement.length + END_PACKET_CHARS;
 
 			if (task.isQuery) break;
 		}
@@ -300,7 +319,7 @@ export class SQLiteWrapper {
 		} else {
 			resolve(result);
 		}
-		this.#pumpQueue();
+		this.#schedulePumpQueue();
 	}
 
 	#rejectPending(error) {
@@ -320,6 +339,7 @@ export class SQLiteWrapper {
 		this.#stderrChunkRemainder = "";
 		this.#isWaitingDrain = false;
 		this.#isFinalizeScheduled = false;
+		this.#isPumpScheduled = false;
 		this.#queryInFlight = 0;
 	}
 
