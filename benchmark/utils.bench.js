@@ -5,6 +5,32 @@ import { normalizeSQL } from "../src/utils.js";
 
 const ITERATIONS = 200000;
 
+function formatBytes(bytes) {
+	const units = ["B", "KB", "MB", "GB"];
+	let i = 0;
+	let n = bytes;
+	while (n >= 1024 && i < units.length - 1) {
+		n /= 1024;
+		i++;
+	}
+	return `${n.toFixed(2)} ${units[i]}`;
+}
+
+function createLargeSQL(targetBytes, withComments = false) {
+	const chunk = withComments
+		? "SELECT id, name FROM users WHERE note = 'a -- literal' AND age > 18; -- comment\n"
+		: "SELECT id, name FROM users WHERE age > 18;\n";
+
+	const parts = [];
+	let size = 0;
+	while (size < targetBytes) {
+		parts.push(chunk);
+		size += chunk.length;
+	}
+
+	return parts.join("");
+}
+
 async function benchmarkWorkload(name, operationCount, fn) {
 	const start = performance.now();
 	await fn();
@@ -71,6 +97,41 @@ function displayResults(results) {
 	console.log("=".repeat(tableWidth) + "\n");
 }
 
+function benchmarkNormalizeSQLMemory(name, sql, iterations) {
+	if (global.gc) global.gc();
+
+	for (let i = 0; i < 3; i++) normalizeSQL(sql);
+
+	if (global.gc) global.gc();
+	const before = process.memoryUsage();
+	let peakHeap = before.heapUsed;
+
+	const start = performance.now();
+	let checksum = 0;
+	for (let i = 0; i < iterations; i++) {
+		const out = normalizeSQL(sql);
+		checksum += out.length;
+		const heapNow = process.memoryUsage().heapUsed;
+		if (heapNow > peakHeap) peakHeap = heapNow;
+	}
+	const totalTime = performance.now() - start;
+
+	if (global.gc) global.gc();
+	const after = process.memoryUsage();
+
+	return {
+		name,
+		inputSize: sql.length,
+		iterations,
+		totalTime: totalTime.toFixed(3),
+		avgTime: (totalTime / iterations).toFixed(6),
+		heapBefore: before.heapUsed,
+		heapPeak: peakHeap,
+		heapAfter: after.heapUsed,
+		checksum,
+	};
+}
+
 async function main() {
 	const results = [];
 
@@ -122,10 +183,7 @@ async function main() {
 	results.push(
 		await benchmarkWorkload(`interpolateSQL multiple params (${ITERATIONS})`, ITERATIONS, async () => {
 			for (let i = 0; i < ITERATIONS; i++) {
-				interpolateSQL(
-					"INSERT INTO users (name, age, city, active) VALUES (?, ?, ?, ?)",
-					["Alice", 30, "New York", true],
-				);
+				interpolateSQL("INSERT INTO users (name, age, city, active) VALUES (?, ?, ?, ?)", ["Alice", 30, "New York", true]);
 			}
 		}),
 	);
@@ -187,7 +245,39 @@ async function main() {
 		}),
 	);
 
+	const largeNoComment = createLargeSQL(5 * 1024 * 1024, false);
+	const largeWithComment = createLargeSQL(5 * 1024 * 1024, true);
+	const xLargeNoComment = createLargeSQL(20 * 1024 * 1024, false);
+	const xLargeWithComment = createLargeSQL(20 * 1024 * 1024, true);
+	const xxLargeNoComment = createLargeSQL(50 * 1024 * 1024, false);
+	const xxLargeWithComment = createLargeSQL(50 * 1024 * 1024, true);
+	const memoryResults = [
+		benchmarkNormalizeSQLMemory("normalizeSQL large 5MB no-comment", largeNoComment, 12),
+		benchmarkNormalizeSQLMemory("normalizeSQL large 5MB with-comment", largeWithComment, 12),
+		benchmarkNormalizeSQLMemory("normalizeSQL xlarge 20MB no-comment", xLargeNoComment, 4),
+		benchmarkNormalizeSQLMemory("normalizeSQL xlarge 20MB with-comment", xLargeWithComment, 4),
+		benchmarkNormalizeSQLMemory("normalizeSQL xxlarge 50MB no-comment", xxLargeNoComment, 2),
+		benchmarkNormalizeSQLMemory("normalizeSQL xxlarge 50MB with-comment", xxLargeWithComment, 2),
+	];
+
 	displayResults(results);
+
+	console.log("normalizeSQL Large SQL Memory (run with --expose-gc for best stability)");
+	console.table(
+		memoryResults.map((item) => ({
+			Benchmark: item.name,
+			Input: formatBytes(item.inputSize),
+			Iterations: item.iterations,
+			"Avg (ms/op)": item.avgTime,
+			"Total (ms)": item.totalTime,
+			"Heap Before": formatBytes(item.heapBefore),
+			"Heap Peak": formatBytes(item.heapPeak),
+			"Heap After": formatBytes(item.heapAfter),
+			"Peak Delta": formatBytes(item.heapPeak - item.heapBefore),
+			Checksum: item.checksum,
+		})),
+	);
+
 	console.log("Utils benchmarks completed!");
 }
 

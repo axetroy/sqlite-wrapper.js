@@ -128,67 +128,100 @@ export function interpolateSQL(sql, params) {
 	parts.push(sql.slice(segStart));
 	return parts.join("");
 }
-
-const regexWhitespace = /\s+/g;
-const regexTrimSemicolons = /;*$/;
-export function normalizeSQL(sql) {
-	const stripped = sql.includes("--") ? stripLineComments(sql) : sql;
-	return stripped.trim().replace(regexWhitespace, " ").replace(regexTrimSemicolons, ";");
+function isWhitespace(code) {
+	// space, tab, lf, vt, ff, cr
+	return code === 32 || code === 9 || code === 10 || code === 11 || code === 12 || code === 13;
 }
 
-/**
- * Strip SQL line comments (-- to end of line) while preserving string literals.
- * @param {string} sql
- * @returns {string}
- */
-function stripLineComments(sql) {
-	const parts = [];
-	let segStart = 0;
-	let i = 0;
+export function normalizeSQL(sql) {
 	const len = sql.length;
+	const outCodes = new Uint16Array(len + 1);
+	let writePos = 0;
+	let pendingSpace = false;
+	let state = "normal";
 
-	while (i < len) {
-		const ch = sql[i];
+	function writeCode(code) {
+		outCodes[writePos++] = code;
+	}
 
-		if (ch === "'") {
-			// Single-quoted string: skip verbatim including escaped quotes ('')
-			i++;
-			while (i < len) {
-				if (sql[i] === "'" && sql[i + 1] === "'") {
-					i += 2;
-				} else if (sql[i] === "'") {
-					i++;
-					break;
-				} else {
-					i++;
-				}
-			}
-		} else if (ch === '"') {
-			// Double-quoted identifier: skip verbatim including escaped quotes ("")
-			i++;
-			while (i < len) {
-				if (sql[i] === '"' && sql[i + 1] === '"') {
-					i += 2;
-				} else if (sql[i] === '"') {
-					i++;
-					break;
-				} else {
-					i++;
-				}
-			}
-		} else if (ch === "-" && sql[i + 1] === "-") {
-			// Line comment: flush accumulated segment then skip to end of line
-			parts.push(sql.slice(segStart, i));
-			while (i < len && sql[i] !== "\n") {
-				i++;
-			}
-			segStart = i;
-		} else {
-			i++;
+	function writeChar(ch) {
+		writeCode(ch.charCodeAt(0));
+	}
+
+	function writePendingSpaceIfNeeded() {
+		if (pendingSpace && writePos > 0) {
+			writeCode(32); // space
+			pendingSpace = false;
 		}
 	}
 
-	if (parts.length === 0) return sql;
-	parts.push(sql.slice(segStart));
-	return parts.join("");
+	for (let i = 0; i < len; i++) {
+		const ch = sql[i];
+		const next = sql[i + 1];
+
+		if (state === "lineComment") {
+			if (ch === "\n") {
+				state = "normal";
+				if (writePos > 0) pendingSpace = true;
+			}
+			continue;
+		}
+
+		if (state === "normal") {
+			if (ch === "-" && next === "-") {
+				state = "lineComment";
+				i++;
+				continue;
+			}
+		}
+
+		if (isWhitespace(ch.charCodeAt(0))) {
+			if (writePos > 0) pendingSpace = true;
+			continue;
+		}
+
+		writePendingSpaceIfNeeded();
+		writeChar(ch);
+
+		if (state === "normal") {
+			if (ch === "'") state = "singleQuote";
+			else if (ch === '"') state = "doubleQuote";
+			continue;
+		}
+
+		if (state === "singleQuote") {
+			if (ch === "'" && next === "'") {
+				writeChar(next);
+				i++;
+				continue;
+			}
+
+			if (ch === "'") state = "normal";
+			continue;
+		}
+
+		if (state === "doubleQuote") {
+			if (ch === '"' && next === '"') {
+				writeChar(next);
+				i++;
+				continue;
+			}
+
+			if (ch === '"') state = "normal";
+		}
+	}
+
+	if (writePos === 0) return ";";
+
+	while (writePos > 0 && outCodes[writePos - 1] === 59) writePos--; // ';'
+	outCodes[writePos++] = 59;
+
+	let out = "";
+	const CHUNK_SIZE = 8192;
+	for (let i = 0; i < writePos; i += CHUNK_SIZE) {
+		const end = Math.min(writePos, i + CHUNK_SIZE);
+		out += String.fromCharCode(...outCodes.subarray(i, end));
+	}
+
+	return out;
 }
