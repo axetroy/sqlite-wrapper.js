@@ -21,14 +21,18 @@ export class AbortError extends Error {
 const DEFAULT_MAX_IN_FLIGHT = 128;
 const DEFAULT_MAX_BATCH_CHARS = 128 * 1024;
 const END_PACKET_CHARS = END_SIGNAL.length + EOL.length;
+const CHAR_LF = 10;
+const CHAR_CR = 13;
+const CHAR_SPACE = 32;
+const CHAR_TAB = 9;
 
 export class SQLiteWrapper {
 	queue = new Queue();
 	#inflight = [];
 	#closed = false;
-	#stdoutChunkBuffer = [];
+	#stdoutResult = "";
 	#stdoutChunkRemainder = "";
-	#stderrChunkBuffer = [];
+	#stderrResult = "";
 	#stderrChunkRemainder = "";
 	#isWaitingDrain = false;
 	#isFinalizeScheduled = false;
@@ -65,25 +69,27 @@ export class SQLiteWrapper {
 	}
 
 	#bindProcessEvents() {
-		this.#proc.on("error", (err) => {
+		const proc = this.#proc;
+
+		proc.on("error", (err) => {
 			this.#logger?.error("sqlite3 process error:", err);
 			this.#handleFatalError(err);
 		});
 
-		this.#proc.stderr.on("data", (chunk) => {
+		proc.stderr.on("data", (chunk) => {
 			this.#handleStderrChunk(chunk);
 		});
 
-		this.#proc.stdout.on("data", (chunk) => {
+		proc.stdout.on("data", (chunk) => {
 			this.#handleStdoutChunk(chunk);
 		});
 
-		this.#proc.stdin.on("drain", () => {
+		proc.stdin.on("drain", () => {
 			this.#isWaitingDrain = false;
 			this.#schedulePumpQueue();
 		});
 
-		this.#proc.on("close", () => {
+		proc.on("close", () => {
 			if (this.#closed) return;
 			this.#handleFatalError(new Error("sqlite3 process closed unexpectedly"));
 		});
@@ -181,6 +187,15 @@ export class SQLiteWrapper {
 		});
 	}
 
+	/**
+	 * Pump queued SQL into sqlite stdin in batches.
+	 *
+	 * Notes on payload construction:
+	 * - We keep using string payloads because stdin encoding is configured as utf-8,
+	 *   so writing strings avoids extra Buffer/Uint8Array creation per batch.
+	 * - In this path, Buffer/Uint8Array usually adds one more conversion/copy and
+	 *   increases GC pressure under high-frequency writes.
+	 */
 	#pumpQueue() {
 		if (this.#closed || this.#isWaitingDrain || this.#queryInFlight > 0) return;
 
@@ -233,18 +248,68 @@ export class SQLiteWrapper {
 		}
 	}
 
+	/**
+	 * Append one stdout line for the current in-flight query.
+	 * Non-query tasks do not need stdout payload accumulation.
+	 * @param {string} line
+	 */
+	#appendStdoutLine(current, line) {
+		if (!current?.isQuery) return;
+
+		if (this.#stdoutResult.length > 0) this.#stdoutResult += EOL;
+		this.#stdoutResult += line;
+	}
+
+	/**
+	 * Append one stderr line for current in-flight task.
+	 * @param {string} line
+	 */
+	#appendStderrLine(line) {
+		if (this.#stderrResult.length > 0) this.#stderrResult += EOL;
+		this.#stderrResult += line;
+	}
+
+	/**
+	 * Append stderr substring after index-based trim to avoid unnecessary full-string trim allocations.
+	 * @param {string} source
+	 * @param {number} start
+	 * @param {number} endExclusive
+	 * @param {boolean} hasInflight
+	 */
+	#appendStderrRange(source, start, endExclusive, hasInflight) {
+		if (!hasInflight || start >= endExclusive) return;
+
+		let s = start;
+		let e = endExclusive;
+
+		while (s < e) {
+			const code = source.charCodeAt(s);
+			if (code !== CHAR_SPACE && code !== CHAR_TAB && code !== CHAR_LF && code !== CHAR_CR) break;
+			s++;
+		}
+
+		while (e > s) {
+			const code = source.charCodeAt(e - 1);
+			if (code !== CHAR_SPACE && code !== CHAR_TAB && code !== CHAR_LF && code !== CHAR_CR) break;
+			e--;
+		}
+
+		if (s >= e) return;
+		this.#appendStderrLine(source.slice(s, e));
+	}
+
 	#handleLine(line) {
-		if (!this.#inflight.length) return;
+		const current = this.#inflight[0];
+		if (!current) return;
 
 		if (END_MARKERS.has(line)) {
-			const current = this.#inflight[0];
 			if (current?.isQuery) {
 				this.#scheduleFinalizeCurrent();
 			} else {
 				this.#finalizeCurrent();
 			}
 		} else {
-			this.#stdoutChunkBuffer.push(line);
+			this.#appendStdoutLine(current, line);
 		}
 	}
 
@@ -259,58 +324,64 @@ export class SQLiteWrapper {
 	}
 
 	#handleStdoutChunk(chunk) {
-		this.#stdoutChunkRemainder += chunk;
+		let remainder = this.#stdoutChunkRemainder;
+		remainder += chunk;
 
 		let lineStart = 0;
-		for (let i = 0; i < this.#stdoutChunkRemainder.length; i++) {
-			if (this.#stdoutChunkRemainder[i] !== "\n") continue;
+		for (let i = 0; i < remainder.length; i++) {
+			if (remainder.charCodeAt(i) !== CHAR_LF) continue;
 
-			let line = this.#stdoutChunkRemainder.slice(lineStart, i);
-			if (line.endsWith("\r")) line = line.slice(0, -1);
-			this.#handleLine(line.trim());
+			let endExclusive = i;
+			if (endExclusive > lineStart && remainder.charCodeAt(endExclusive - 1) === CHAR_CR) {
+				endExclusive--;
+			}
+
+			this.#handleLine(remainder.slice(lineStart, endExclusive));
 			lineStart = i + 1;
 		}
 
-		this.#stdoutChunkRemainder = this.#stdoutChunkRemainder.slice(lineStart);
+		this.#stdoutChunkRemainder = remainder.slice(lineStart);
 	}
 
 	#handleStderrChunk(chunk) {
-		this.#stderrChunkRemainder += chunk;
+		let remainder = this.#stderrChunkRemainder;
+		remainder += chunk;
+		const hasInflight = this.#inflight.length > 0;
 
 		let lineStart = 0;
-		for (let i = 0; i < this.#stderrChunkRemainder.length; i++) {
-			if (this.#stderrChunkRemainder[i] !== "\n") continue;
+		for (let i = 0; i < remainder.length; i++) {
+			if (remainder.charCodeAt(i) !== CHAR_LF) continue;
 
-			let line = this.#stderrChunkRemainder.slice(lineStart, i);
-			if (line.endsWith("\r")) line = line.slice(0, -1);
+			let endExclusive = i;
+			if (endExclusive > lineStart && remainder.charCodeAt(endExclusive - 1) === CHAR_CR) {
+				endExclusive--;
+			}
 
-			const normalized = line.trim();
-			if (normalized && this.#inflight.length > 0) this.#stderrChunkBuffer.push(normalized);
+			this.#appendStderrRange(remainder, lineStart, endExclusive, hasInflight);
 			lineStart = i + 1;
 		}
 
-		this.#stderrChunkRemainder = this.#stderrChunkRemainder.slice(lineStart);
+		this.#stderrChunkRemainder = remainder.slice(lineStart);
 	}
 
 	#flushStderrRemainder() {
 		const normalized = this.#stderrChunkRemainder.trim();
 		if (!normalized || this.#inflight.length === 0) return;
 
-		this.#stderrChunkBuffer.push(normalized);
+		this.#appendStderrLine(normalized);
 		this.#stderrChunkRemainder = "";
 	}
 
 	#finalizeCurrent() {
 		this.#flushStderrRemainder();
-
-		const result = this.#stdoutChunkBuffer.join(EOL).trim();
-		const error = this.#stderrChunkBuffer.join(EOL).trim();
-
-		this.#stdoutChunkBuffer = [];
-		this.#stderrChunkBuffer = [];
-
 		const current = this.#inflight.shift();
 		if (!current) return;
+
+		const result = current.isQuery ? this.#stdoutResult.trim() : "";
+		const error = this.#stderrResult.trim();
+
+		this.#stdoutResult = "";
+		this.#stderrResult = "";
 		if (current.isQuery) this.#queryInFlight--;
 		const { resolve, reject } = current;
 
@@ -333,9 +404,9 @@ export class SQLiteWrapper {
 			task.reject(error);
 		}
 
-		this.#stdoutChunkBuffer = [];
+		this.#stdoutResult = "";
 		this.#stdoutChunkRemainder = "";
-		this.#stderrChunkBuffer = [];
+		this.#stderrResult = "";
 		this.#stderrChunkRemainder = "";
 		this.#isWaitingDrain = false;
 		this.#isFinalizeScheduled = false;

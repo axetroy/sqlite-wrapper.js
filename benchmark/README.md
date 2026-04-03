@@ -22,6 +22,18 @@ To run the utils benchmark (escapeValue, interpolateSQL, normalizeSQL), use:
 npm run benchmark:utils
 ```
 
+To compare stream processing strategies (String vs Buffer vs Uint8Array), use:
+
+```bash
+npm run benchmark:process-stream
+```
+
+To compare legacy and optimized stream handlers directly, use:
+
+```bash
+npm run benchmark:stream-handlers
+```
+
 ## What is Benchmarked
 
 The SQLite benchmark suite tests the following operations:
@@ -67,6 +79,12 @@ The standalone utils benchmark covers these pure-JS workloads:
 10. **normalizeSQL with whitespace** - Collapsing excess whitespace
 11. **normalizeSQL with line comments** - Stripping a trailing line comment
 12. **normalizeSQL complex CREATE TABLE** - Multi-line CREATE TABLE with several inline comments
+
+The process-stream benchmark covers these pure stream-processing strategies:
+
+1. **String strategy** - Chunk parsing + line accumulation using strings
+2. **Buffer strategy** - Chunk parsing + line accumulation using Buffer segments
+3. **Uint8Array strategy** - Chunk parsing + line accumulation using Uint8Array segments
 
 ## Understanding Results
 

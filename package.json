@@ -32,6 +32,8 @@
         "benchmark": "node benchmark/index.bench.js",
         "benchmark:queue": "node benchmark/queue.bench.js",
         "benchmark:utils": "node benchmark/utils.bench.js",
+        "benchmark:process-stream": "node --expose-gc benchmark/process-stream.bench.js",
+        "benchmark:stream-handlers": "node --expose-gc benchmark/stream-handler-compare.bench.js",
         "build": "knip && rslib build",
         "prepack": "npm run build"
     },
