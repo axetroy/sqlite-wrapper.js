@@ -5,5 +5,5 @@
 		"script/download-sqlite3.js",
 		"src/index.{js,ts,tsx}"
 	],
-	"ignore": ["rslib.config.js", "fixtures/**/*.(c|m)?js"]
+	"ignore": ["rslib.config.js", "fixtures/**/*.(c|m)?js", "benchmark/**/*.(c|m)?js"]
 }
