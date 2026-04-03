@@ -187,6 +187,48 @@ async function main() {
 		}),
 	);
 
+	// normalizeSQL batch benchmarks: simulate normalizing thousands of *distinct* SQL
+	// strings, which exercises real-world GC pressure from unique string allocations.
+	const BATCH_SIZES = [1000, 5000];
+	for (const batchSize of BATCH_SIZES) {
+		// Build a diverse set of SQL strings upfront so V8 cannot optimize them away
+		// as a single repeated constant.
+		const sqlStatements = Array.from({ length: batchSize }, (_, idx) => {
+			const mod = idx % 6;
+			if (mod === 0) return `SELECT * FROM users WHERE id = ${idx}`;
+			if (mod === 1) return `  SELECT   name,  email  FROM   users  WHERE  age > ${idx}  `;
+			if (mod === 2) return `INSERT INTO logs (user_id, action) VALUES (${idx}, 'login') -- auto-generated`;
+			if (mod === 3) return `UPDATE users SET last_seen = datetime('now') WHERE id = ${idx}; -- update ts`;
+			if (mod === 4) return `DELETE FROM sessions WHERE user_id = ${idx} AND expires_at < datetime('now')`;
+			return `SELECT u.id, u.name, p.bio\n  FROM users u\n  JOIN profiles p ON p.user_id = u.id -- join\n WHERE u.id = ${idx}`;
+		});
+
+		results.push(
+			await benchmarkWorkload(`normalizeSQL batch ${batchSize} distinct SQLs`, batchSize, async () => {
+				for (let i = 0; i < batchSize; i++) {
+					normalizeSQL(sqlStatements[i]);
+				}
+			}),
+		);
+
+		// Repeat the batch several times so the measurement is stable and GC runs
+		// are more likely to occur within the timed window.
+		const BATCH_REPEATS = 10;
+		results.push(
+			await benchmarkWorkload(
+				`normalizeSQL batch ${batchSize} distinct SQLs ×${BATCH_REPEATS} (GC pressure)`,
+				batchSize * BATCH_REPEATS,
+				async () => {
+					for (let r = 0; r < BATCH_REPEATS; r++) {
+						for (let i = 0; i < batchSize; i++) {
+							normalizeSQL(sqlStatements[i]);
+						}
+					}
+				},
+			),
+		);
+	}
+
 	displayResults(results);
 	console.log("Utils benchmarks completed!");
 }
