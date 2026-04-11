@@ -106,6 +106,23 @@ export class SQLiteWrapper {
 		return this.#enqueueSQL(sql, params, { isQuery: false, signal: options?.signal });
 	}
 
+	async run(sql, params = [], options = {}) {
+		const sqlWithMeta = sql + ";\nSELECT changes() as changes, last_insert_rowid() as lastInsertRowid;";
+		const raw = await this.#enqueueSQL(sqlWithMeta, params, { isQuery: true, signal: options?.signal });
+		if (!raw.trim()) return { changes: 0, lastInsertRowid: 0 };
+
+		try {
+			const result = JSON.parse(raw);
+			const row = result[0] ?? {};
+			return {
+				changes: row.changes ?? 0,
+				lastInsertRowid: row.lastInsertRowid ?? 0,
+			};
+		} catch {
+			throw new Error("Invalid JSON from sqlite3: " + raw);
+		}
+	}
+
 	async query(sql, params = [], options = {}) {
 		const raw = await this.#enqueueSQL(sql, params, { isQuery: true, signal: options?.signal });
 		if (!raw.trim()) return [];
