@@ -95,6 +95,39 @@ describe("SQLiteWrapper", () => {
 		assert.deepEqual(updatedRows, [{ id: 1, name: "Charlie" }]);
 	});
 
+	test("run returns changes and lastInsertRowid for INSERT", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS run_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+
+		const result = await sqlite.run("INSERT INTO run_users (name) VALUES (?)", ["Alice"]);
+		assert.equal(result.changes, 1);
+		assert.equal(result.lastInsertRowid, 1);
+
+		const result2 = await sqlite.run("INSERT INTO run_users (name) VALUES (?)", ["Bob"]);
+		assert.equal(result2.changes, 1);
+		assert.equal(result2.lastInsertRowid, 2);
+	});
+
+	test("run returns changes for UPDATE", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS run_update_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+		await sqlite.exec("INSERT INTO run_update_users (name) VALUES (?)", ["Alice"]);
+		await sqlite.exec("INSERT INTO run_update_users (name) VALUES (?)", ["Bob"]);
+
+		const result = await sqlite.run("UPDATE run_update_users SET name = ? WHERE id = ?", ["Charlie", 1]);
+		assert.equal(result.changes, 1);
+
+		const noOpResult = await sqlite.run("UPDATE run_update_users SET name = ? WHERE id = ?", ["Dave", 999]);
+		assert.equal(noOpResult.changes, 0);
+	});
+
+	test("run returns changes for DELETE", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS run_delete_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+		await sqlite.exec("INSERT INTO run_delete_users (name) VALUES (?)", ["Alice"]);
+		await sqlite.exec("INSERT INTO run_delete_users (name) VALUES (?)", ["Bob"]);
+
+		const result = await sqlite.run("DELETE FROM run_delete_users WHERE id = ?", [1]);
+		assert.equal(result.changes, 1);
+	});
+
 	test("create table and query with Chinese characters", async () => {
 		await sqlite.exec(
 			outdent`
@@ -365,6 +398,18 @@ describe("AbortSignal support", () => {
 		controller.abort();
 
 		await assert.rejects(sqlite.query("SELECT 1;", [], { signal: controller.signal }), (err) => {
+			assert.equal(err.name, "AbortError");
+			assert.ok(AbortError.is(err));
+			assert.ok(err instanceof AbortError);
+			return true;
+		});
+	});
+
+	test("run rejects immediately when signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+
+		await assert.rejects(sqlite.run("SELECT 1;", [], { signal: controller.signal }), (err) => {
 			assert.equal(err.name, "AbortError");
 			assert.ok(AbortError.is(err));
 			assert.ok(err instanceof AbortError);

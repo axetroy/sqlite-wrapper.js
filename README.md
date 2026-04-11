@@ -60,6 +60,10 @@ await sqlite.exec("UPDATE users SET name = ? WHERE id = ?", ["Charlie", 1]);
 const results = await sqlite.query("SELECT * FROM users WHERE id = ?", [1]);
 console.log(results); // Output: [ { id: 1, name: 'Charlie' } ]
 
+// Update with affected row count
+const { changes } = await sqlite.run("UPDATE users SET name = ? WHERE id = ?", ["Dave", 1]);
+console.log(changes); // Output: 1
+
 // Close the SQLite3 process
 await sqlite.close();
 ```
@@ -93,7 +97,7 @@ Returns the number of pending SQL queries in the queue.
 
 ##### `exec(sql, params?)`
 
-Executes a SQL statement without returning results. Use for `CREATE`, `INSERT`, `UPDATE`, `DELETE` operations.
+Executes a SQL statement without returning results. Use for `CREATE`, `INSERT`, `UPDATE`, `DELETE` operations when you don't need execution metadata.
 
 ```js
 await sqlite.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
@@ -104,6 +108,25 @@ await sqlite.exec("INSERT INTO users (name) VALUES (?)", ["Alice"]);
 | --------- | -------- | -------------------------------------------------------- |
 | `sql`     | `string` | SQL statement to execute                                 |
 | `params`  | `any[]`  | (Optional) Parameters to substitute for `?` placeholders |
+
+##### `run(sql, params?)`
+
+Executes a write SQL statement and returns execution metadata. Use for `INSERT`, `UPDATE`, or `DELETE` when you need to know how many rows were affected or the rowid of the inserted row.
+
+```js
+const { changes, lastInsertRowid } = await sqlite.run("INSERT INTO users (name) VALUES (?)", ["Alice"]);
+console.log(changes);        // 1
+console.log(lastInsertRowid); // 1 (the new row's rowid)
+
+const { changes: updated } = await sqlite.run("UPDATE users SET name = ? WHERE id = ?", ["Bob", 1]);
+console.log(updated); // 1
+```
+
+| Parameter      | Type                                            | Description                                              |
+| -------------- | ----------------------------------------------- | -------------------------------------------------------- |
+| `sql`          | `string`                                        | SQL statement to execute                                 |
+| `params`       | `any[]`                                         | (Optional) Parameters to substitute for `?` placeholders |
+| **Returns**    | `Promise<{ changes: number, lastInsertRowid: number }>` | Rows affected and last inserted rowid      |
 
 ##### `query<T>(sql, params?)`
 

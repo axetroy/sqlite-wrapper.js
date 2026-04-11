@@ -58,6 +58,13 @@ export interface SQLiteOperationOptions {
 	signal?: AbortSignal;
 }
 
+export interface RunResult {
+	/** Number of rows affected by the last INSERT, UPDATE, or DELETE statement. */
+	changes: number;
+	/** Row ID of the last successful INSERT. 0 if no INSERT was performed. */
+	lastInsertRowid: number;
+}
+
 export declare class SQLiteWrapper implements Disposable {
 	/**
 	 * Queue for pending SQL queries
@@ -90,6 +97,16 @@ export declare class SQLiteWrapper implements Disposable {
 	 * @param options.signal AbortSignal to cancel the operation before it is dispatched
 	 */
 	exec(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<void>;
+
+	/**
+	 * Executes a write SQL statement and returns execution metadata (affected rows and last insert rowid).
+	 * Use for INSERT, UPDATE, or DELETE when you need to know how many rows were affected or what rowid was inserted.
+	 * @param sql SQL statement to execute
+	 * @param params Query parameters
+	 * @param options Operation options
+	 * @param options.signal AbortSignal to cancel the operation before it is dispatched
+	 */
+	run(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<RunResult>;
 
 	/**
 	 * Executes a SQL query and returns the result.
