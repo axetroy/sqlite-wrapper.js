@@ -14,6 +14,10 @@ async function benchmarkWorkload(name, operationCount, fn) {
 	const totalTime = performance.now() - start;
 	const avgTime = totalTime / operationCount;
 	const opsPerSecond = operationCount / (totalTime / 1000);
+	const compactNumber = new Intl.NumberFormat("en-US", {
+		notation: "compact",
+		maximumFractionDigits: 2,
+	});
 
 	return {
 		name,
@@ -21,15 +25,15 @@ async function benchmarkWorkload(name, operationCount, fn) {
 		minTime: "-",
 		maxTime: "-",
 		totalTime: totalTime.toFixed(3),
-		opsPerSecond: opsPerSecond.toFixed(2),
+		opsPerSecond: compactNumber.format(opsPerSecond),
 	};
 }
 
 function displayResults(results) {
 	const terminalWidth = Number(process.stdout.columns) || 120;
-	const separators = 5;
-	const metricTitles = ["Avg (ms)", "Min (ms)", "Max (ms)", "Total (ms)", "Ops/sec"];
-	const metricWidths = [10, 10, 10, 11, 10];
+	const separators = 3;
+	const metricTitles = ["Avg (ms)", "Total (ms)", "Ops/sec"];
+	const metricWidths = [10, 11, 10];
 	const nameWidth = Math.max(24, terminalWidth - metricWidths.reduce((sum, width) => sum + width, 0) - separators);
 	const tableWidth = nameWidth + metricWidths.reduce((sum, width) => sum + width, 0) + separators;
 
@@ -42,6 +46,41 @@ function displayResults(results) {
 
 	const formatLeft = (text, width) => truncate(text, width).padEnd(width);
 	const formatRight = (text, width) => truncate(text, width).padStart(width);
+	const wrapText = (text, width) => {
+		const words = String(text).split(/\s+/);
+		const lines = [];
+		let current = "";
+
+		for (const word of words) {
+			const candidate = current ? `${current} ${word}` : word;
+			if (candidate.length <= width) {
+				current = candidate;
+				continue;
+			}
+
+			if (current) {
+				lines.push(current);
+			}
+
+			if (word.length <= width) {
+				current = word;
+				continue;
+			}
+
+			let remaining = word;
+			while (remaining.length > width) {
+				lines.push(remaining.slice(0, width - 1) + "-");
+				remaining = remaining.slice(width - 1);
+			}
+			current = remaining;
+		}
+
+		if (current) {
+			lines.push(current);
+		}
+
+		return lines.length ? lines : [""];
+	};
 
 	console.log("\n" + "=".repeat(tableWidth));
 	console.log("Queue Benchmark Results");
@@ -52,23 +91,35 @@ function displayResults(results) {
 			formatRight(metricTitles[0], metricWidths[0]),
 			formatRight(metricTitles[1], metricWidths[1]),
 			formatRight(metricTitles[2], metricWidths[2]),
-			formatRight(metricTitles[3], metricWidths[3]),
-			formatRight(metricTitles[4], metricWidths[4]),
 		].join(" "),
 	);
 	console.log("-".repeat(tableWidth));
 
 	for (const result of results) {
-		console.log(
-			[
-				formatLeft(result.name, nameWidth),
-				formatRight(result.avgTime, metricWidths[0]),
-				formatRight(result.minTime, metricWidths[1]),
-				formatRight(result.maxTime, metricWidths[2]),
-				formatRight(result.totalTime, metricWidths[3]),
-				formatRight(result.opsPerSecond, metricWidths[4]),
-			].join(" "),
-		);
+		const nameLines = wrapText(result.name, nameWidth);
+
+		for (let i = 0; i < nameLines.length; i++) {
+			if (i === 0) {
+				console.log(
+					[
+						formatLeft(nameLines[i], nameWidth),
+						formatRight(result.avgTime, metricWidths[0]),
+						formatRight(result.totalTime, metricWidths[1]),
+						formatRight(result.opsPerSecond, metricWidths[2]),
+					].join(" "),
+				);
+				continue;
+			}
+
+			console.log(
+				[
+					formatLeft(nameLines[i], nameWidth),
+					" ".repeat(metricWidths[0]),
+					" ".repeat(metricWidths[1]),
+					" ".repeat(metricWidths[2]),
+				].join(" "),
+			);
+		}
 	}
 
 	console.log("=".repeat(tableWidth) + "\n");
