@@ -159,7 +159,8 @@ export class SQLiteWrapper {
 		try {
 			await previous;
 		} catch {
-			// ignore errors from a previous transaction; this one should still proceed
+			// The previous transaction's error has already been delivered to its own caller.
+			// We only need the gate to resolve so this transaction can proceed.
 		}
 
 		try {
@@ -169,6 +170,10 @@ export class SQLiteWrapper {
 				await this.exec("COMMIT");
 				return result;
 			} catch (error) {
+				// ROLLBACK errors (e.g. "no transaction is active") are intentionally
+				// swallowed here: if BEGIN itself succeeded but fn threw, we always
+				// attempt a ROLLBACK as best-effort cleanup, but we surface the
+				// original error to the caller regardless of whether it succeeds.
 				await this.exec("ROLLBACK").catch(() => {});
 				throw error;
 			}
