@@ -380,6 +380,149 @@ describe("SQLiteWrapper", () => {
 	});
 });
 
+describe("transaction()", () => {
+	test("commits successfully and returns fn return value", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_commit (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+
+		const result = await sqlite.transaction(async (tx) => {
+			await tx.exec("INSERT INTO tx_commit (val) VALUES (?)", ["hello"]);
+			return 42;
+		});
+
+		assert.equal(result, 42);
+
+		const rows = await sqlite.query("SELECT val FROM tx_commit");
+		assert.deepEqual(rows, [{ val: "hello" }]);
+	});
+
+	test("rolls back on error and rethrows", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_rollback (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+		await sqlite.exec("INSERT INTO tx_rollback (val) VALUES (?)", ["before"]);
+
+		const boom = new Error("intentional failure");
+
+		await assert.rejects(
+			sqlite.transaction(async (tx) => {
+				await tx.exec("INSERT INTO tx_rollback (val) VALUES (?)", ["during"]);
+				throw boom;
+			}),
+			boom,
+		);
+
+		const rows = await sqlite.query("SELECT val FROM tx_rollback");
+		assert.deepEqual(rows, [{ val: "before" }]);
+	});
+
+	test("serializes concurrent transactions so they never interleave", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_serial (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+
+		const order = [];
+
+		const t1 = sqlite.transaction(async (tx) => {
+			order.push("t1-start");
+			await tx.exec("INSERT INTO tx_serial (val) VALUES (?)", ["t1-a"]);
+			// yield to let t2 try to start
+			await new Promise((r) => setImmediate(r));
+			await tx.exec("INSERT INTO tx_serial (val) VALUES (?)", ["t1-b"]);
+			order.push("t1-end");
+		});
+
+		const t2 = sqlite.transaction(async (tx) => {
+			order.push("t2-start");
+			await tx.exec("INSERT INTO tx_serial (val) VALUES (?)", ["t2-a"]);
+			order.push("t2-end");
+		});
+
+		await Promise.all([t1, t2]);
+
+		// t1 must fully complete before t2 starts
+		assert.deepEqual(order, ["t1-start", "t1-end", "t2-start", "t2-end"]);
+
+		const rows = await sqlite.query("SELECT val FROM tx_serial ORDER BY id ASC");
+		assert.deepEqual(rows.map((r) => r.val), ["t1-a", "t1-b", "t2-a"]);
+	});
+
+	test("second transaction proceeds after first rolls back", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_after_rollback (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+
+		// First transaction fails
+		await assert.rejects(
+			sqlite.transaction(async (tx) => {
+				await tx.exec("INSERT INTO tx_after_rollback (val) VALUES (?)", ["will-rollback"]);
+				throw new Error("fail");
+			}),
+		);
+
+		// Second transaction should still work
+		await sqlite.transaction(async (tx) => {
+			await tx.exec("INSERT INTO tx_after_rollback (val) VALUES (?)", ["after-rollback"]);
+		});
+
+		const rows = await sqlite.query("SELECT val FROM tx_after_rollback");
+		assert.deepEqual(rows, [{ val: "after-rollback" }]);
+	});
+
+	test("tx object exposes exec, run, and query but not transaction", async () => {
+		await sqlite.transaction(async (tx) => {
+			assert.equal(typeof tx.exec, "function");
+			assert.equal(typeof tx.run, "function");
+			assert.equal(typeof tx.query, "function");
+			assert.equal(typeof tx.transaction, "undefined");
+		});
+	});
+
+	test("tx.run returns changes and lastInsertRowid inside transaction", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_run (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+
+		const result = await sqlite.transaction(async (tx) => {
+			return tx.run("INSERT INTO tx_run (val) VALUES (?)", ["x"]);
+		});
+
+		assert.equal(result.changes, 1);
+		assert.equal(result.lastInsertRowid, 1);
+	});
+
+	test("tx.query returns rows inside transaction", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_query (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+		await sqlite.exec("INSERT INTO tx_query (val) VALUES (?)", ["visible"]);
+
+		const rows = await sqlite.transaction(async (tx) => {
+			return tx.query("SELECT val FROM tx_query");
+		});
+
+		assert.deepEqual(rows, [{ val: "visible" }]);
+	});
+
+	test("IMMEDIATE transaction type succeeds", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_immediate (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+
+		await sqlite.transaction(async (tx) => {
+			await tx.exec("INSERT INTO tx_immediate (val) VALUES (?)", ["imm"]);
+		}, "IMMEDIATE");
+
+		const rows = await sqlite.query("SELECT val FROM tx_immediate");
+		assert.deepEqual(rows, [{ val: "imm" }]);
+	});
+
+	test("EXCLUSIVE transaction type succeeds", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_exclusive (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+
+		await sqlite.transaction(async (tx) => {
+			await tx.exec("INSERT INTO tx_exclusive (val) VALUES (?)", ["excl"]);
+		}, "EXCLUSIVE");
+
+		const rows = await sqlite.query("SELECT val FROM tx_exclusive");
+		assert.deepEqual(rows, [{ val: "excl" }]);
+	});
+
+	test("throws TypeError for invalid transaction type", async () => {
+		await assert.rejects(
+			sqlite.transaction(async () => {}, "INVALID"),
+			/transaction type must be one of/,
+		);
+	});
+});
+
 describe("AbortSignal support", () => {
 	test("exec rejects immediately when signal is already aborted", async () => {
 		const controller = new AbortController();

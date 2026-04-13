@@ -26,10 +26,13 @@ const CHAR_CR = 13;
 const CHAR_SPACE = 32;
 const CHAR_TAB = 9;
 
+const VALID_TRANSACTION_TYPES = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"];
+
 export class SQLiteWrapper {
 	queue = new Queue();
 	#inflight = [];
 	#closed = false;
+	#transactionChain = Promise.resolve();
 	#stdoutResult = "";
 	#stdoutChunkRemainder = "";
 	#stderrResult = "";
@@ -131,6 +134,46 @@ export class SQLiteWrapper {
 			return JSON.parse(raw);
 		} catch {
 			throw new Error("Invalid JSON from sqlite3: " + raw);
+		}
+	}
+
+	async transaction(fn, type = "DEFERRED") {
+		if (!VALID_TRANSACTION_TYPES.includes(type)) {
+			throw new TypeError(`transaction type must be one of: ${VALID_TRANSACTION_TYPES.join(", ")}`);
+		}
+
+		const tx = {
+			exec: (sql, params, options) => this.exec(sql, params, options),
+			run: (sql, params, options) => this.run(sql, params, options),
+			query: (sql, params, options) => this.query(sql, params, options),
+		};
+
+		let releaseGate;
+		const gate = new Promise((resolve) => {
+			releaseGate = resolve;
+		});
+
+		const previous = this.#transactionChain;
+		this.#transactionChain = gate;
+
+		try {
+			await previous;
+		} catch {
+			// ignore errors from a previous transaction; this one should still proceed
+		}
+
+		try {
+			await this.exec(`BEGIN ${type}`);
+			try {
+				const result = await fn(tx);
+				await this.exec("COMMIT");
+				return result;
+			} catch (error) {
+				await this.exec("ROLLBACK").catch(() => {});
+				throw error;
+			}
+		} finally {
+			releaseGate();
 		}
 	}
 

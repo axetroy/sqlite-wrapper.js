@@ -65,6 +65,25 @@ export interface RunResult {
 	lastInsertRowid: number;
 }
 
+/**
+ * The isolation level for a transaction.
+ * - `DEFERRED` (default): Acquires the lock lazily on first read/write.
+ * - `IMMEDIATE`: Acquires a write lock immediately, blocking concurrent writers.
+ * - `EXCLUSIVE`: Acquires the most exclusive lock, blocking all other connections.
+ */
+export type TransactionType = "DEFERRED" | "IMMEDIATE" | "EXCLUSIVE";
+
+/**
+ * A restricted database handle passed to the `transaction()` callback.
+ * Exposes `exec`, `run`, and `query` for use within the transaction body.
+ * Does not expose `transaction()` to prevent nesting.
+ */
+export interface Transaction {
+	exec(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<void>;
+	run(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<RunResult>;
+	query<T = any>(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<T[]>;
+}
+
 export declare class SQLiteWrapper implements Disposable {
 	/**
 	 * Queue for pending SQL queries
@@ -116,6 +135,23 @@ export declare class SQLiteWrapper implements Disposable {
 	 * @param options.signal AbortSignal to cancel the operation before it is dispatched
 	 */
 	query<T = any>(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<T[]>;
+
+	/**
+	 * Runs `fn` inside a serialized transaction.
+	 *
+	 * Concurrent calls are automatically queued and executed one at a time,
+	 * so it is safe to call `transaction()` from multiple concurrent async
+	 * contexts — they will never interleave.
+	 *
+	 * The callback receives a restricted `tx` handle that exposes `exec`,
+	 * `run`, and `query`. Do **not** call `db.transaction()` recursively
+	 * inside the callback; doing so will deadlock.
+	 *
+	 * @param fn Async callback that performs database work using `tx`
+	 * @param type SQLite transaction isolation type (default: `"DEFERRED"`)
+	 * @returns The value returned by `fn`
+	 */
+	transaction<T = void>(fn: (tx: Transaction) => Promise<T>, type?: TransactionType): Promise<T>;
 
 	/**
 	 * Closes the SQLite connection (Process).
