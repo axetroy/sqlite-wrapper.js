@@ -28,11 +28,6 @@ const CHAR_TAB = 9;
 
 const VALID_TRANSACTION_TYPES = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"];
 
-// Sentinel placed on a task that was previously deferred (moved to #deferredQueue)
-// and has been re-enqueued with priority after its transaction ended.
-// Prevents the task from being deferred a second time by the next transaction.
-const DEFERRED_RESTORED = Symbol("deferred_restored");
-
 export class SQLiteWrapper {
 	queue = new Queue();
 	#inflight = [];
@@ -317,15 +312,18 @@ export class SQLiteWrapper {
 			if (!nextTask) break;
 
 			// When a transaction is active, defer any task that does not belong to it.
-			// Tasks marked DEFERRED_RESTORED have already been deferred once and are
-			// re-enqueued with priority, so they bypass this check and are never
-			// deferred a second time.
-			if (activeId !== null && nextTask.txId !== activeId && nextTask.txId !== DEFERRED_RESTORED) {
+			// Tasks that were previously deferred and re-enqueued (restoredFromDeferred)
+			// bypass this check and are never deferred a second time.
+			if (activeId !== null && nextTask.txId !== activeId && !nextTask.restoredFromDeferred) {
 				this.#deferredQueue.enqueue(queue.dequeue());
 				continue;
 			}
 
-			if (nextTask.isQuery && inflightCount > 0) break;
+			// Equivalent to the former early-return guard
+		// `if (inflight.length > 0 && queue.peek()?.isQuery) return;`
+		// but evaluated after deferral so we test the first eligible task, not just
+		// whatever happens to be at the head of the queue.
+		if (nextTask.isQuery && inflightCount > 0) break;
 
 			const task = queue.dequeue();
 			const statement = normalizeSQL(task.sql);
@@ -495,7 +493,9 @@ export class SQLiteWrapper {
 		this.queue.clear();
 		while (!this.#deferredQueue.isEmpty()) {
 			const task = this.#deferredQueue.dequeue();
-			task.txId = DEFERRED_RESTORED;
+			// Mark with a dedicated flag rather than overwriting txId, so the
+			// original transaction association is preserved for any other consumers.
+			task.restoredFromDeferred = true;
 			this.queue.enqueue(task);
 		}
 		for (const task of remaining) {
