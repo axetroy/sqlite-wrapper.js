@@ -521,6 +521,94 @@ describe("transaction()", () => {
 			/transaction type must be one of/,
 		);
 	});
+
+	test("bare exec calls during a transaction are deferred until after commit", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_deferred (val TEXT)");
+
+		const log = [];
+
+		// A barrier that resolves once the transaction body is running and the first
+		// tx statement has committed to sqlite3.  At that point #activeTransactionId
+		// is set, so any bare exec enqueued after the barrier will be deferred.
+		let resolveBarrier;
+		const barrier = new Promise((r) => {
+			resolveBarrier = r;
+		});
+
+		const txPromise = sqlite.transaction(async (tx) => {
+			await tx.exec("INSERT INTO tx_deferred (val) VALUES ('tx-1')");
+			// Signal that the transaction is active, then yield to let the bare
+			// exec below be enqueued while #activeTransactionId is still set.
+			resolveBarrier();
+			await new Promise((r) => setImmediate(r));
+			await tx.exec("INSERT INTO tx_deferred (val) VALUES ('tx-2')");
+			log.push("tx-end");
+		});
+
+		await barrier;
+
+		// Enqueue a bare exec that must be deferred until after COMMIT.
+		const barePromise = sqlite.exec("INSERT INTO tx_deferred (val) VALUES ('bare')").then(() => {
+			log.push("bare-done");
+		});
+
+		await Promise.all([txPromise, barePromise]);
+
+		// Rows must appear in transaction order, with 'bare' last.
+		const rows = await sqlite.query("SELECT val FROM tx_deferred ORDER BY rowid");
+		assert.deepEqual(
+			rows.map((r) => r.val),
+			["tx-1", "tx-2", "bare"],
+		);
+
+		// 'bare-done' must be recorded after 'tx-end' (i.e. after COMMIT).
+		assert.ok(log.indexOf("tx-end") < log.indexOf("bare-done"), "bare exec must resolve after transaction commits");
+	});
+
+	test("deferred tasks are not re-deferred by the next transaction", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_chain (val TEXT)");
+
+		const log = [];
+
+		let resolveBarrier1;
+		const barrier1 = new Promise((r) => {
+			resolveBarrier1 = r;
+		});
+
+		// T1: insert 'a', then yield so the bare exec below can be enqueued.
+		const t1 = sqlite.transaction(async (tx) => {
+			await tx.exec("INSERT INTO tx_chain (val) VALUES ('t1')");
+			resolveBarrier1();
+			await new Promise((r) => setImmediate(r));
+		});
+
+		await barrier1;
+
+		// Bare exec enqueued while T1 is active → deferred.
+		const barePromise = sqlite.exec("INSERT INTO tx_chain (val) VALUES ('bare')").then(() => {
+			log.push("bare-done");
+		});
+
+		// T2 is serialized after T1 via #transactionChain.
+		const t2 = sqlite.transaction(async (tx) => {
+			await tx.exec("INSERT INTO tx_chain (val) VALUES ('t2')");
+			log.push("t2-end");
+		});
+
+		await Promise.all([t1, t2, barePromise]);
+
+		// Expected order: t1, then bare (deferred from T1), then t2.
+		// The bare exec must complete before T2's INSERT (T2 waits for gate which is
+		// released after deferred tasks are restored and dispatched).
+		const rows = await sqlite.query("SELECT val FROM tx_chain ORDER BY rowid");
+		assert.deepEqual(
+			rows.map((r) => r.val),
+			["t1", "bare", "t2"],
+		);
+
+		// 'bare-done' must be logged before 't2-end'.
+		assert.ok(log.indexOf("bare-done") < log.indexOf("t2-end"), "deferred bare exec must run before T2");
+	});
 });
 
 describe("AbortSignal support", () => {

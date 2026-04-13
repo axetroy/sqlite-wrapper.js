@@ -28,11 +28,22 @@ const CHAR_TAB = 9;
 
 const VALID_TRANSACTION_TYPES = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"];
 
+// Sentinel placed on a task that was previously deferred (moved to #deferredQueue)
+// and has been re-enqueued with priority after its transaction ended.
+// Prevents the task from being deferred a second time by the next transaction.
+const DEFERRED_RESTORED = Symbol("deferred_restored");
+
 export class SQLiteWrapper {
 	queue = new Queue();
 	#inflight = [];
 	#closed = false;
 	#transactionChain = Promise.resolve();
+	// Symbol of the transaction currently active between BEGIN and COMMIT/ROLLBACK.
+	// Null when no transaction is in progress.
+	#activeTransactionId = null;
+	// Tasks that arrived while a transaction was active and do not belong to it.
+	// Re-enqueued (with priority) once the transaction ends.
+	#deferredQueue = new Queue();
 	#stdoutResult = "";
 	#stdoutChunkRemainder = "";
 	#stderrResult = "";
@@ -102,16 +113,20 @@ export class SQLiteWrapper {
 	// 主接口方法
 	// ----------------------------
 	get pendingQueries() {
-		return this.queue.size + this.#inflight.length;
+		return this.queue.size + this.#deferredQueue.size + this.#inflight.length;
 	}
 
 	async exec(sql, params = [], options = {}) {
-		return this.#enqueueSQL(sql, params, { isQuery: false, signal: options?.signal });
+		return this.#enqueueSQL(sql, params, { isQuery: false, signal: options?.signal, txId: null });
 	}
 
 	async run(sql, params = [], options = {}) {
+		return this.#runWithTxId(sql, params, options, null);
+	}
+
+	async #runWithTxId(sql, params, options, txId) {
 		const sqlWithMeta = sql + ";\nSELECT changes() as changes, last_insert_rowid() as lastInsertRowid;";
-		const raw = await this.#enqueueSQL(sqlWithMeta, params, { isQuery: true, signal: options?.signal });
+		const raw = await this.#enqueueSQL(sqlWithMeta, params, { isQuery: true, signal: options?.signal, txId });
 		if (!raw.trim()) return { changes: 0, lastInsertRowid: 0 };
 
 		try {
@@ -127,7 +142,11 @@ export class SQLiteWrapper {
 	}
 
 	async query(sql, params = [], options = {}) {
-		const raw = await this.#enqueueSQL(sql, params, { isQuery: true, signal: options?.signal });
+		return this.#queryWithTxId(sql, params, options, null);
+	}
+
+	async #queryWithTxId(sql, params, options, txId) {
+		const raw = await this.#enqueueSQL(sql, params, { isQuery: true, signal: options?.signal, txId });
 		if (!raw.trim()) return [];
 
 		try {
@@ -142,11 +161,7 @@ export class SQLiteWrapper {
 			throw new TypeError(`transaction type must be one of: ${VALID_TRANSACTION_TYPES.join(", ")}`);
 		}
 
-		const tx = {
-			exec: (sql, params, options) => this.exec(sql, params, options),
-			run: (sql, params, options) => this.run(sql, params, options),
-			query: (sql, params, options) => this.query(sql, params, options),
-		};
+		const txId = Symbol();
 
 		let releaseGate;
 		const gate = new Promise((resolve) => {
@@ -163,21 +178,37 @@ export class SQLiteWrapper {
 			// We only need the gate to resolve so this transaction can proceed.
 		}
 
+		// Claim the active slot synchronously (no await between here and BEGIN).
+		// Any bare exec/run/query calls enqueued from this point on will be deferred
+		// until after COMMIT / ROLLBACK.
+		this.#activeTransactionId = txId;
+
+		const tx = {
+			exec: (sql, params = [], options = {}) =>
+				this.#enqueueSQL(sql, params, { isQuery: false, signal: options?.signal, txId }),
+			run: (sql, params = [], options = {}) => this.#runWithTxId(sql, params, options, txId),
+			query: (sql, params = [], options = {}) => this.#queryWithTxId(sql, params, options, txId),
+		};
+
 		try {
-			await this.exec(`BEGIN ${type}`);
+			await this.#enqueueSQL(`BEGIN ${type}`, [], { isQuery: false, txId });
 			try {
 				const result = await fn(tx);
-				await this.exec("COMMIT");
+				await this.#enqueueSQL("COMMIT", [], { isQuery: false, txId });
 				return result;
 			} catch (error) {
 				// ROLLBACK errors (e.g. "no transaction is active") are intentionally
 				// swallowed here: if BEGIN itself succeeded but fn threw, we always
 				// attempt a ROLLBACK as best-effort cleanup, but we surface the
 				// original error to the caller regardless of whether it succeeds.
-				await this.exec("ROLLBACK").catch(() => {});
+				await this.#enqueueSQL("ROLLBACK", [], { isQuery: false, txId }).catch(() => {});
 				throw error;
 			}
 		} finally {
+			// Release the active slot before unblocking the next transaction so that
+			// deferred tasks are restored while no transaction holds the lock.
+			this.#activeTransactionId = null;
+			this.#restoreDeferred();
 			releaseGate();
 		}
 	}
@@ -193,7 +224,7 @@ export class SQLiteWrapper {
 	// ----------------------------
 	// 队列系统
 	// ----------------------------
-	#enqueueSQL(sql, params, { isQuery, signal }) {
+	#enqueueSQL(sql, params, { isQuery, signal, txId = null }) {
 		if (this.#closed) return Promise.reject(new Error("Cannot enqueue SQL on closed SQLiteWrapper"));
 
 		if (signal?.aborted) {
@@ -208,6 +239,7 @@ export class SQLiteWrapper {
 			const task = {
 				sql: formatted,
 				isQuery,
+				txId,
 				enqueuedAt: this.#now(),
 				dispatchedAt: 0,
 				timingEmitted: false,
@@ -226,7 +258,10 @@ export class SQLiteWrapper {
 			if (signal) {
 				abortHandler = () => {
 					if (task.dispatchedAt === 0) {
-						this.queue.remove(task);
+						// Task may have been moved to the deferred queue; check both.
+						if (!this.queue.remove(task)) {
+							this.#deferredQueue.remove(task);
+						}
 						task.reject(new AbortError(undefined, signal.reason));
 					}
 				};
@@ -268,10 +303,10 @@ export class SQLiteWrapper {
 		if (queue.isEmpty()) return;
 
 		const inflight = this.#inflight;
-		if (inflight.length > 0 && queue.peek()?.isQuery) return;
 		const maxInFlight = this.#maxInFlight;
 		const maxBatchChars = this.#maxBatchChars;
 		const debug = this.#logger?.debug;
+		const activeId = this.#activeTransactionId;
 
 		const payloadParts = [];
 		let payloadChars = 0;
@@ -280,6 +315,16 @@ export class SQLiteWrapper {
 		while (!queue.isEmpty() && inflightCount < maxInFlight && payloadChars < maxBatchChars) {
 			const nextTask = queue.peek();
 			if (!nextTask) break;
+
+			// When a transaction is active, defer any task that does not belong to it.
+			// Tasks marked DEFERRED_RESTORED have already been deferred once and are
+			// re-enqueued with priority, so they bypass this check and are never
+			// deferred a second time.
+			if (activeId !== null && nextTask.txId !== activeId && nextTask.txId !== DEFERRED_RESTORED) {
+				this.#deferredQueue.enqueue(queue.dequeue());
+				continue;
+			}
+
 			if (nextTask.isQuery && inflightCount > 0) break;
 
 			const task = queue.dequeue();
@@ -437,6 +482,28 @@ export class SQLiteWrapper {
 		this.#stderrChunkRemainder = "";
 	}
 
+	/**
+	 * Re-enqueue all deferred tasks back into the main queue with priority so they
+	 * run before any new tasks but cannot be deferred again by the next transaction.
+	 */
+	#restoreDeferred() {
+		if (this.#deferredQueue.isEmpty()) return;
+
+		// Prepend deferred tasks before whatever is currently in the main queue,
+		// preserving their original relative order.
+		const remaining = this.queue.toArray();
+		this.queue.clear();
+		while (!this.#deferredQueue.isEmpty()) {
+			const task = this.#deferredQueue.dequeue();
+			task.txId = DEFERRED_RESTORED;
+			this.queue.enqueue(task);
+		}
+		for (const task of remaining) {
+			this.queue.enqueue(task);
+		}
+		this.#schedulePumpQueue();
+	}
+
 	#finalizeCurrent() {
 		this.#flushStderrRemainder();
 		const current = this.#inflight.shift();
@@ -469,6 +536,12 @@ export class SQLiteWrapper {
 			task.reject(error);
 		}
 
+		while (!this.#deferredQueue.isEmpty()) {
+			const task = this.#deferredQueue.dequeue();
+			task.reject(error);
+		}
+
+		this.#activeTransactionId = null;
 		this.#stdoutResult = "";
 		this.#stdoutChunkRemainder = "";
 		this.#stderrResult = "";
