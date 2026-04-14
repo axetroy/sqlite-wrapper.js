@@ -4,7 +4,7 @@ import test, { describe } from "node:test";
 import { Queue } from "./queue.js";
 
 describe("Queue", () => {
-	test("maintains FIFO order", () => {
+	test("保持先进先出顺序", () => {
 		const queue = new Queue();
 		queue.enqueue(1);
 		queue.enqueue(2);
@@ -16,7 +16,7 @@ describe("Queue", () => {
 		assert.equal(queue.dequeue(), null);
 	});
 
-	test("tracks size and clear", () => {
+	test("跟踪大小并支持清空", () => {
 		const queue = new Queue();
 		assert.equal(queue.size, 0);
 		assert.equal(queue.isEmpty(), true);
@@ -32,7 +32,7 @@ describe("Queue", () => {
 		assert.equal(queue.dequeue(), null);
 	});
 
-	test("exports all values as an array", () => {
+	test("将所有值导出为数组", () => {
 		const queue = new Queue();
 		queue.enqueue(1);
 		queue.enqueue(2);
@@ -43,7 +43,7 @@ describe("Queue", () => {
 		assert.equal(queue.peek(), 1);
 	});
 
-	test("supports lazy iteration without consuming the queue", () => {
+	test("支持惰性迭代而不消耗队列", () => {
 		const queue = new Queue();
 		queue.enqueue("a");
 		queue.enqueue("b");
