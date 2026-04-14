@@ -150,6 +150,9 @@ export function interpolateSQL(sql, params) {
 // Module-level reusable buffer for normalizeSQL. Grows as needed; never shrinks.
 // Safe because Node.js is single-threaded and normalizeSQL is synchronous.
 let _normBuf = new Uint16Array(1024);
+// Module-level TextDecoder reuse avoids per-call object allocation.
+// 'utf-16le' correctly maps each Uint16 element to its UTF-16 code unit on LE platforms (x86/x64/ARM64).
+const _normDecoder = new TextDecoder("utf-16le");
 
 export function normalizeSQL(sql) {
 	const len = sql.length;
@@ -230,12 +233,5 @@ export function normalizeSQL(sql) {
 	while (writePos > 0 && outCodes[writePos - 1] === CC_SEMICOLON) writePos--;
 	outCodes[writePos++] = CC_SEMICOLON;
 
-	let out = "";
-	const CHUNK_SIZE = 8192;
-	for (let i = 0; i < writePos; i += CHUNK_SIZE) {
-		const end = Math.min(writePos, i + CHUNK_SIZE);
-		out += String.fromCharCode(...outCodes.subarray(i, end));
-	}
-
-	return out;
+	return _normDecoder.decode(outCodes.subarray(0, writePos));
 }

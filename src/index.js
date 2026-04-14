@@ -462,41 +462,31 @@ export class SQLiteWrapper {
 	}
 
 	#handleStdoutChunk(chunk) {
-		let remainder = this.#stdoutChunkRemainder;
-		remainder += chunk;
+		let remainder = this.#stdoutChunkRemainder + chunk;
 
 		let lineStart = 0;
-		for (let i = 0; i < remainder.length; i++) {
-			if (remainder.charCodeAt(i) !== CHAR_LF) continue;
-
-			let endExclusive = i;
-			if (endExclusive > lineStart && remainder.charCodeAt(endExclusive - 1) === CHAR_CR) {
-				endExclusive--;
-			}
-
+		let pos = remainder.indexOf("\n", lineStart);
+		while (pos !== -1) {
+			const endExclusive = pos > lineStart && remainder.charCodeAt(pos - 1) === CHAR_CR ? pos - 1 : pos;
 			this.#handleLine(remainder.slice(lineStart, endExclusive));
-			lineStart = i + 1;
+			lineStart = pos + 1;
+			pos = remainder.indexOf("\n", lineStart);
 		}
 
 		this.#stdoutChunkRemainder = remainder.slice(lineStart);
 	}
 
 	#handleStderrChunk(chunk) {
-		let remainder = this.#stderrChunkRemainder;
-		remainder += chunk;
+		let remainder = this.#stderrChunkRemainder + chunk;
 		const hasInflight = this.#inflight.length > 0;
 
 		let lineStart = 0;
-		for (let i = 0; i < remainder.length; i++) {
-			if (remainder.charCodeAt(i) !== CHAR_LF) continue;
-
-			let endExclusive = i;
-			if (endExclusive > lineStart && remainder.charCodeAt(endExclusive - 1) === CHAR_CR) {
-				endExclusive--;
-			}
-
+		let pos = remainder.indexOf("\n", lineStart);
+		while (pos !== -1) {
+			const endExclusive = pos > lineStart && remainder.charCodeAt(pos - 1) === CHAR_CR ? pos - 1 : pos;
 			this.#appendStderrRange(remainder, lineStart, endExclusive, hasInflight);
-			lineStart = i + 1;
+			lineStart = pos + 1;
+			pos = remainder.indexOf("\n", lineStart);
 		}
 
 		this.#stderrChunkRemainder = remainder.slice(lineStart);
