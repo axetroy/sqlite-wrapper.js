@@ -242,6 +242,7 @@ export class SQLiteWrapper {
 				isQuery,
 				txId,
 				restoredFromDeferred: false,
+				dispatched: false,
 				enqueuedAt: this.#onTiming ? performance.now() : 0,
 				dispatchedAt: 0,
 				timingEmitted: false,
@@ -259,7 +260,7 @@ export class SQLiteWrapper {
 
 			if (signal) {
 				abortHandler = () => {
-					if (task.dispatchedAt === 0) {
+					if (!task.dispatched) {
 						// Task may have been moved to the deferred queue; check both.
 						if (!this.queue.remove(task)) {
 							this.#deferredQueue.remove(task);
@@ -328,6 +329,7 @@ export class SQLiteWrapper {
 				const statement = normalizeSQL(task.sql);
 
 				debug?.("Queue SQL for execution:", statement);
+				task.dispatched = true;
 				task.dispatchedAt = this.#onTiming ? performance.now() : 0;
 				inflight.push(task);
 				inflightCount++;
@@ -360,6 +362,7 @@ export class SQLiteWrapper {
 				const statement = normalizeSQL(task.sql);
 
 				debug?.("Queue SQL for execution:", statement);
+				task.dispatched = true;
 				task.dispatchedAt = this.#onTiming ? performance.now() : 0;
 				inflight.push(task);
 				inflightCount++;
