@@ -513,41 +513,6 @@ Transaction (5 inserts)                                                       0.
 </summary>
 </details>
 
-<details><summary>Linux x86-64 Benchmark Results (GitHub Actions, Node 22)</summary>
-
-```
-========================================================================================================================
-SQLite Wrapper Benchmark Results
-========================================================================================================================
-Benchmark                                                          Avg (ms)   Min (ms)   Max (ms)  Total (ms)    Ops/sec
-------------------------------------------------------------------------------------------------------------------------
-Table Creation                                                        0.955      0.862      1.154      47.742    1047.29
-Single Row Insert                                                     0.717      0.589     17.728     717.200    1394.31
-Bulk Insert (100 rows with transaction)                               5.490      5.126      5.883      54.899     182.15
-Simple SELECT (1000 rows)                                             1.388      1.141      3.499     138.835     720.28
-SELECT with WHERE clause                                              0.815      0.658      1.250      81.478    1227.33
-UPDATE Single Row                                                     0.523      0.064      1.016     261.622    1911.16
-DELETE Single Row                                                     0.653      0.547      1.082     326.691    1530.50
-JOIN Query (1000 orders, 100 customers)                               1.489      1.449      1.646      74.445     671.64
-Transaction (5 inserts)                                               1.080      0.847      1.649     107.967     926.21
-100k Point Query by ID (100000 rows)                                  0.080      0.059      0.476      79.960   12506.22
-100k Range Query by Category (100000 rows)                            0.285      0.235      0.410      56.938    3512.60
-100k Aggregate Query (100000 rows)                                  153.570    152.429    156.815   15357.041       6.51
-100k Single Row Update (100000 rows)                                  0.696      0.579      1.092     696.098    1436.58
-100k Batch Update 100 rows (100000 rows)                              4.010      2.305     38.075     401.046     249.35
-100k Simple Commands (SELECT 1)                                    0.042351          -          -    4235.073   23612.35
-100k Sequential INSERT                                             0.615784          -          -   61578.403    1623.95
-100k Sequential UPDATE                                             0.623593          -          -   62359.300    1603.61
-20k Burst Enqueue INSERT (Promise.all)                             0.011503          -          -     230.059   86934.32
-20k Sequential Enqueue INSERT (await loop)                         0.050377          -          -    1007.548   19850.18
-20k Chunked Enqueue INSERT (1000/chunk)                            0.009509          -          -     190.178  105164.78
-20k Burst Enqueue UPDATE (Promise.all)                             0.011101          -          -     222.018   90082.84
-========================================================================================================================
-```
-
-</summary>
-</details>
-
 ## License
 
 The [Anti 996 License](LICENSE)
