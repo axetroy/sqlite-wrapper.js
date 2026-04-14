@@ -517,16 +517,20 @@ export class SQLiteWrapper {
 	#restoreDeferred() {
 		if (this.#deferredQueue.isEmpty()) return;
 
-		// Mark all deferred tasks before prepending them.
-		for (const task of this.#deferredQueue) {
+		// Prepend deferred tasks before whatever is currently in the main queue,
+		// preserving their original relative order.
+		const remaining = this.queue.toArray();
+		this.queue.clear();
+		while (!this.#deferredQueue.isEmpty()) {
+			const task = this.#deferredQueue.dequeue();
 			// Mark with a dedicated flag rather than overwriting txId, so the
 			// original transaction association is preserved for any other consumers.
 			task.restoredFromDeferred = true;
+			this.queue.enqueue(task);
 		}
-
-		// Prepend deferred tasks before whatever is currently in the main queue,
-		// preserving their original relative order.  #deferredQueue is cleared by prepend.
-		this.queue.prepend(this.#deferredQueue);
+		for (const task of remaining) {
+			this.queue.enqueue(task);
+		}
 		this.#schedulePumpQueue();
 	}
 

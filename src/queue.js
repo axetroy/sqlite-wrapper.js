@@ -35,33 +35,12 @@ export class Queue {
 		}
 	}
 
-	#shrink() {
-		const cap = this.#items.length;
-		// Only shrink when the backing array is larger than the initial capacity
-		// and the current size has dropped to 1/4 of capacity.
-		if (cap <= INITIAL_CAPACITY || this.#size > cap >> 2) return;
-
-		const newCap = Math.max(INITIAL_CAPACITY, cap >> 1);
-		const newItems = new Array(newCap);
-		const oldMask = this.#mask;
-		for (let i = 0; i < this.#size; i++) {
-			newItems[i] = this.#items[(this.#head + i) & oldMask];
-		}
-		this.#items = newItems;
-		this.#head = 0;
-		this.#tail = this.#size;
-		this.#mask = newCap - 1;
-	}
-
 	dequeue() {
 		if (this.#size === 0) return null;
 		const value = this.#items[this.#head];
 		this.#items[this.#head] = undefined;
 		this.#head = (this.#head + 1) & this.#mask;
 		this.#size--;
-		// Only evaluate shrink when size is a multiple of 16, limiting the
-		// check to at most once per 16 dequeues without a separate counter field.
-		if ((this.#size & 15) === 0) this.#shrink();
 		return value;
 	}
 
@@ -71,59 +50,6 @@ export class Queue {
 		this.#tail = 0;
 		this.#size = 0;
 		this.#mask = INITIAL_CAPACITY - 1;
-	}
-
-	/**
-	 * Prepend all items from `other` to the front of this queue, preserving
-	 * their relative order.  `other` is emptied (cleared) in the process.
-	 * @param {Queue} other
-	 */
-	prepend(other) {
-		if (other.#size === 0) return;
-
-		const totalSize = this.#size + other.#size;
-
-		let newCap = this.#items.length;
-		while (newCap < totalSize) newCap *= 2;
-
-		if (newCap === this.#items.length) {
-			// Capacity is sufficient: linearize self into a small temp array so we
-			// can write other's items followed by self's items into the backing array
-			// without clobbering sources before they are read.
-			const selfLinear = new Array(this.#size);
-			const selfMask = this.#mask;
-			for (let i = 0; i < this.#size; i++) {
-				selfLinear[i] = this.#items[(this.#head + i) & selfMask];
-			}
-			const otherMask = other.#mask;
-			for (let i = 0; i < other.#size; i++) {
-				this.#items[i] = other.#items[(other.#head + i) & otherMask];
-			}
-			for (let i = 0; i < this.#size; i++) {
-				this.#items[other.#size + i] = selfLinear[i];
-			}
-		} else {
-			// Need to grow: allocate a fresh backing array.
-			const newItems = new Array(newCap);
-			const otherMask = other.#mask;
-			// Write other's items first (they go to the front).
-			for (let i = 0; i < other.#size; i++) {
-				newItems[i] = other.#items[(other.#head + i) & otherMask];
-			}
-			// Append this queue's items after.
-			const selfMask = this.#mask;
-			for (let i = 0; i < this.#size; i++) {
-				newItems[other.#size + i] = this.#items[(this.#head + i) & selfMask];
-			}
-			this.#items = newItems;
-			this.#mask = newCap - 1;
-		}
-
-		this.#head = 0;
-		this.#tail = totalSize;
-		this.#size = totalSize;
-
-		other.clear();
 	}
 
 	remove(value) {
