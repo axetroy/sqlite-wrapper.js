@@ -154,7 +154,24 @@ let _normBuf = new Uint16Array(1024);
 // If big-endian support is ever needed, switch to String.fromCharCode in a loop.
 const _normDecoder = new TextDecoder("utf-16le");
 
+// LRU 缓存：对高频重复 SQL（如 BEGIN/COMMIT/ROLLBACK 或固定模板查询）跳过重复扫描。
+// 使用 Map 的插入顺序实现简单的 LRU：命中时将条目移至末尾，超限时淘汰最老条目（首项）。
+// 只缓存长度不超过 _NORM_CACHE_MAX_KEY_LEN 的 SQL，避免大字符串占用过多内存。
+const _NORM_CACHE_MAX_SIZE = 256;
+const _NORM_CACHE_MAX_KEY_LEN = 4096;
+const _normCache = new Map();
+
 export function normalizeSQL(sql) {
+	// 对短 SQL 先查缓存，命中则直接返回，命中项移至末尾以维持 LRU 语义
+	if (sql.length <= _NORM_CACHE_MAX_KEY_LEN) {
+		const cached = _normCache.get(sql);
+		if (cached !== undefined) {
+			_normCache.delete(sql);
+			_normCache.set(sql, cached);
+			return cached;
+		}
+	}
+
 	const len = sql.length;
 
 	// Ensure the reusable buffer is large enough (output is at most len+1 chars)
@@ -228,10 +245,22 @@ export function normalizeSQL(sql) {
 		}
 	}
 
-	if (writePos === 0) return ";";
+	let result;
+	if (writePos === 0) {
+		result = ";";
+	} else {
+		while (writePos > 0 && outCodes[writePos - 1] === CC_SEMICOLON) writePos--;
+		outCodes[writePos++] = CC_SEMICOLON;
+		result = _normDecoder.decode(outCodes.subarray(0, writePos));
+	}
 
-	while (writePos > 0 && outCodes[writePos - 1] === CC_SEMICOLON) writePos--;
-	outCodes[writePos++] = CC_SEMICOLON;
+	// 将结果写入缓存；超过上限时淘汰最老条目（Map 首项）
+	if (sql.length <= _NORM_CACHE_MAX_KEY_LEN) {
+		if (_normCache.size >= _NORM_CACHE_MAX_SIZE) {
+			_normCache.delete(_normCache.keys().next().value);
+		}
+		_normCache.set(sql, result);
+	}
 
-	return _normDecoder.decode(outCodes.subarray(0, writePos));
+	return result;
 }
