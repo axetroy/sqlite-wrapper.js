@@ -297,6 +297,15 @@ export class SQLiteWrapper {
 
 	// Reset a task descriptor and return it to the pool for reuse.
 	// Called at the end of task.resolve() and task.reject() wrappers.
+	//
+	// Closure-safety: the resolve and reject wrappers capture `task` by reference and
+	// are stored on task.resolve / task.reject.  Setting both to null here breaks the
+	// self-referential cycle before the object enters the pool.  The only other live
+	// reference to the wrapper at this point is the caller's (e.g. #finalizeCurrent's
+	// destructured `const { resolve, reject } = current`), which is a local variable
+	// that goes out of scope immediately after the call returns — it is never stored
+	// anywhere and cannot be reached once its enclosing frame exits.  There is therefore
+	// no risk of the pooled object retaining or being aliased through stale closures.
 	#releaseTask(task) {
 		if (this.#taskPool.length >= TASK_POOL_MAX_SIZE) return;
 		task.sql = null;

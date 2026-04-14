@@ -161,9 +161,13 @@ export function interpolateSQL(sql, params) {
 
 	if (template !== undefined) {
 		// Only promote to the end of the Map (LRU update) when the cache has reached
-		// capacity and eviction could occur.  Skipping the delete+set when the cache
-		// is smaller than its limit avoids constant Map mutation overhead on every
-		// cache hit for workloads that use fewer than _INTERP_CACHE_MAX_SIZE templates.
+		// capacity and a subsequent insertion would trigger eviction.
+		// Using >= (not >) is intentional: when size equals the limit the cache IS full,
+		// so we must maintain correct LRU order to ensure the least-recently-used entry
+		// gets evicted on the next insertion — not a recently-accessed one.
+		// Skipping the delete+set when the cache is below capacity avoids constant Map
+		// mutation overhead on workloads that use fewer than _INTERP_CACHE_MAX_SIZE
+		// distinct templates (the common case).
 		if (_interpCache.size >= _INTERP_CACHE_MAX_SIZE) {
 			_interpCache.delete(sql);
 			_interpCache.set(sql, template);
