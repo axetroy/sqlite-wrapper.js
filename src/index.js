@@ -4,19 +4,10 @@ import { performance } from "node:perf_hooks";
 import { END_SIGNAL, END_MARKERS } from "./constants.js";
 import { Queue } from "./queue.js";
 import { interpolateSQL, normalizeSQL } from "./utils.js";
+import { ReaderPool } from "./reader-pool.js";
 export { escapeValue, interpolateSQL } from "./utils.js";
-
-export class AbortError extends Error {
-	constructor(message = "This operation was aborted", reason = undefined) {
-		super(message);
-		this.name = "AbortError";
-		this.reason = reason;
-	}
-
-	static is(err) {
-		return err instanceof AbortError || (err != null && err.name === "AbortError");
-	}
-}
+export { AbortError } from "./errors.js";
+import { AbortError } from "./errors.js";
 
 const DEFAULT_MAX_IN_FLIGHT = 128;
 const DEFAULT_MAX_BATCH_CHARS = 128 * 1024;
@@ -57,16 +48,38 @@ export class SQLiteWrapper {
 	#payloadParts = [];
 	// Object pool for task descriptors; reduces GC pressure under high-frequency use.
 	#taskPool = [];
+	// 读进程池（仅在 readPoolSize > 0 且使用文件数据库时启用）
+	#readerPool = null;
 	#proc;
 	#logger;
 	#onTiming;
 
-	constructor(sqlite3ExePath, { dbPath, logger, onTiming, maxInFlight, maxBatchChars } = {}) {
+	constructor(sqlite3ExePath, { dbPath, logger, onTiming, maxInFlight, maxBatchChars, readPoolSize } = {}) {
 		this.#logger = logger;
 		this.#onTiming = onTiming;
 		this.#maxInFlight = this.#normalizePositiveInteger(maxInFlight, DEFAULT_MAX_IN_FLIGHT, "maxInFlight");
 		this.#maxBatchChars = this.#normalizePositiveInteger(maxBatchChars, DEFAULT_MAX_BATCH_CHARS, "maxBatchChars");
+
+		// 先校验 readPoolSize，避免进程启动后再抛出异常导致资源泄漏
+		if (readPoolSize !== undefined && (!Number.isInteger(readPoolSize) || readPoolSize <= 0)) {
+			throw new TypeError("readPoolSize must be a positive integer");
+		}
+
 		this.#initProcess(sqlite3ExePath, dbPath);
+
+		// 启用读写分离进程池：需要正整数的 readPoolSize 且必须指定文件数据库
+		if (readPoolSize !== undefined) {
+			if (dbPath && dbPath !== ":memory:") {
+				// 自动开启 WAL 模式，使读写进程可并发访问数据库
+				this.exec("PRAGMA journal_mode=WAL").catch(() => {});
+				this.#readerPool = new ReaderPool(readPoolSize, sqlite3ExePath, dbPath, { onTiming, logger });
+			} else {
+				this.#logger?.warn(
+					"readPoolSize 被指定但未提供有效的 dbPath（文件路径），读进程池不会启用。" +
+						"内存数据库（:memory:）无法跨进程共享。",
+				);
+			}
+		}
 	}
 
 	// ----------------------------
@@ -116,7 +129,8 @@ export class SQLiteWrapper {
 	// 主接口方法
 	// ----------------------------
 	get pendingQueries() {
-		return this.queue.size + this.#deferredQueue.size + this.#inflight.length;
+		const readerPending = this.#readerPool ? this.#readerPool.pendingCount : 0;
+		return this.queue.size + this.#deferredQueue.size + this.#inflight.length + readerPending;
 	}
 
 	async exec(sql, params = [], options = {}) {
@@ -149,6 +163,26 @@ export class SQLiteWrapper {
 	}
 
 	async #queryWithTxId(sql, params, options, txId) {
+		// 路由到读进程池：仅当池可用、不在事务/排他区内（txId === null）
+		if (this.#readerPool && !this.#readerPool.isClosed && txId === null) {
+			if (this.#closed) return Promise.reject(new Error("Cannot enqueue SQL on closed SQLiteWrapper"));
+			if (options?.signal?.aborted) {
+				return Promise.reject(new AbortError(undefined, options.signal.reason));
+			}
+
+			const formatted = params.length === 0 && !sql.includes("?") ? sql : interpolateSQL(sql, params);
+			const enqueuedAt = this.#onTiming ? performance.now() : 0;
+
+			const raw = await this.#readerPool.query(formatted, { signal: options?.signal, enqueuedAt });
+			if (!raw) return [];
+			try {
+				return JSON.parse(raw);
+			} catch {
+				throw new Error("Invalid JSON from sqlite3: " + raw);
+			}
+		}
+
+		// 回退到写进程（事务内、排他区内，或读进程池未启用）
 		const raw = await this.#enqueueSQL(sql, params, { isQuery: true, signal: options?.signal, txId });
 		if (!raw) return [];
 
@@ -226,6 +260,7 @@ export class SQLiteWrapper {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#rejectPending(new Error("SQLiteWrapper is closed"));
+		this.#readerPool?.close();
 		this.#proc?.stdin?.destroy();
 		this.#proc?.kill();
 	}

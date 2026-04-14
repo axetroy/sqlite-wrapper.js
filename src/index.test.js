@@ -1011,3 +1011,197 @@ describe("错误处理", () => {
 			});
 	});
 });
+
+describe("读写分离进程池（ReaderPool）", () => {
+	let tmpDb;
+	let db;
+
+	beforeEach(async () => {
+		await downloadSQLite3();
+		tmpDb = path.join(os.tmpdir(), `sqlite-rw-pool-test-${Date.now()}.db`);
+		db = new SQLiteWrapper(SQLite3BinaryFile, { dbPath: tmpDb, readPoolSize: 2 });
+		// 等待 WAL PRAGMA 完成
+		await db.exec("SELECT 1");
+	});
+
+	afterEach(async () => {
+		db.close();
+		// 删除临时数据库文件
+		const { unlink } = await import("node:fs/promises");
+		await unlink(tmpDb).catch(() => {});
+		await unlink(tmpDb + "-wal").catch(() => {});
+		await unlink(tmpDb + "-shm").catch(() => {});
+	});
+
+	test("读进程池：基本查询返回正确结果", async () => {
+		await db.exec("CREATE TABLE IF NOT EXISTS rp_basic (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+		await db.exec("INSERT INTO rp_basic (val) VALUES (?)", ["hello"]);
+
+		const rows = await db.query("SELECT val FROM rp_basic");
+		assert.deepEqual(rows, [{ val: "hello" }]);
+	});
+
+	test("读进程池：query() 与 exec() 不互相阻塞（读写并发）", async () => {
+		await db.exec("CREATE TABLE IF NOT EXISTS rp_concurrent (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+
+		const writes = [];
+		for (let i = 0; i < 10; i++) {
+			writes.push(db.exec("INSERT INTO rp_concurrent (val) VALUES (?)", [`item-${i}`]));
+		}
+		const reads = [
+			db.query("SELECT COUNT(*) AS n FROM rp_concurrent"),
+			db.query("SELECT COUNT(*) AS n FROM rp_concurrent"),
+		];
+
+		await Promise.all([...writes, ...reads]);
+
+		const rows = await db.query("SELECT COUNT(*) AS n FROM rp_concurrent");
+		assert.equal(rows[0].n, 10);
+	});
+
+	test("读进程池：多个并发查询结果互相隔离", async () => {
+		await db.exec(`
+			CREATE TABLE IF NOT EXISTS rp_isolate (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT);
+			INSERT INTO rp_isolate (val) VALUES ('a');
+			INSERT INTO rp_isolate (val) VALUES ('b');
+			INSERT INTO rp_isolate (val) VALUES ('c');
+		`);
+
+		const [r1, r2, r3] = await Promise.all([
+			db.query("SELECT val FROM rp_isolate WHERE id = ?", [1]),
+			db.query("SELECT val FROM rp_isolate WHERE id = ?", [2]),
+			db.query("SELECT val FROM rp_isolate WHERE id = ?", [3]),
+		]);
+
+		assert.deepEqual(r1, [{ val: "a" }]);
+		assert.deepEqual(r2, [{ val: "b" }]);
+		assert.deepEqual(r3, [{ val: "c" }]);
+	});
+
+	test("读进程池：事务内 query() 路由至写进程（可读取未提交数据）", async () => {
+		await db.exec("CREATE TABLE IF NOT EXISTS rp_tx_read (val TEXT)");
+
+		let rowsInsideTx;
+
+		await db.transaction(async (tx) => {
+			await tx.exec("INSERT INTO rp_tx_read (val) VALUES ('pending')");
+			// 事务内 query 走写进程，能看到尚未提交的数据
+			rowsInsideTx = await tx.query("SELECT val FROM rp_tx_read");
+		});
+
+		assert.deepEqual(rowsInsideTx, [{ val: "pending" }]);
+
+		// 事务外 query 走读进程池，只能看到已提交数据
+		const rowsOutside = await db.query("SELECT val FROM rp_tx_read");
+		assert.deepEqual(rowsOutside, [{ val: "pending" }]);
+	});
+
+	test("读进程池：exclusive zone 内 query() 路由至写进程", async () => {
+		await db.exec("CREATE TABLE IF NOT EXISTS rp_zone_read (val TEXT)");
+
+		let rowsInZone;
+
+		await db.exclusive(async (zone) => {
+			await zone.exec("INSERT INTO rp_zone_read (val) VALUES ('zone-data')");
+			// 排他区内 query 走写进程，能看到未提交数据
+			rowsInZone = await zone.query("SELECT val FROM rp_zone_read");
+		});
+
+		assert.deepEqual(rowsInZone, [{ val: "zone-data" }]);
+	});
+
+	test("读进程池：AbortSignal 预先中止时立即拒绝", async () => {
+		const controller = new AbortController();
+		controller.abort();
+
+		await assert.rejects(
+			db.query("SELECT 1", [], { signal: controller.signal }),
+			(err) => {
+				assert.equal(err.name, "AbortError");
+				assert.ok(AbortError.is(err));
+				return true;
+			},
+		);
+	});
+
+	test("读进程池：失败查询抛出错误且不影响后续查询", async () => {
+		await db.exec("CREATE TABLE IF NOT EXISTS rp_err_test (val TEXT)");
+		await db.exec("INSERT INTO rp_err_test (val) VALUES (?)", ["ok"]);
+
+		const [bad, good] = await Promise.allSettled([
+			db.query("SELECT * FROM nonexistent_table_xyz"),
+			db.query("SELECT val FROM rp_err_test"),
+		]);
+
+		assert.equal(bad.status, "rejected");
+		assert.match(bad.reason.message, /nonexistent_table_xyz/);
+
+		assert.equal(good.status, "fulfilled");
+		assert.deepEqual(good.value, [{ val: "ok" }]);
+	});
+
+	test("读进程池：close() 拒绝排队中的查询", async () => {
+		await db.exec("CREATE TABLE IF NOT EXISTS rp_close_test (val TEXT)");
+
+		// 先填充多个查询使读进程忙碌
+		const pending = [];
+		for (let i = 0; i < 5; i++) {
+			pending.push(db.query("SELECT * FROM rp_close_test"));
+		}
+
+		db.close();
+
+		const results = await Promise.race([
+			Promise.allSettled(pending),
+			new Promise((_, reject) => setTimeout(() => reject(new Error("超时")), 2000)),
+		]);
+
+		// 所有待处理查询均应以 rejected 结束
+		for (const r of results) {
+			assert.equal(r.status, "rejected");
+		}
+	});
+
+	test("读进程池：传入非正整数 readPoolSize 时抛出错误", () => {
+		assert.throws(() => new SQLiteWrapper(SQLite3BinaryFile, { dbPath: tmpDb, readPoolSize: 0 }), /readPoolSize must be a positive integer/);
+		assert.throws(() => new SQLiteWrapper(SQLite3BinaryFile, { dbPath: tmpDb, readPoolSize: -1 }), /readPoolSize must be a positive integer/);
+		assert.throws(() => new SQLiteWrapper(SQLite3BinaryFile, { dbPath: tmpDb, readPoolSize: 1.5 }), /readPoolSize must be a positive integer/);
+	});
+
+	test("读进程池：readPoolSize 无 dbPath 时不创建进程池（回退单进程模式）", async () => {
+		const singleProc = new SQLiteWrapper(SQLite3BinaryFile, { readPoolSize: 2 });
+		await singleProc.exec("CREATE TABLE IF NOT EXISTS rp_no_dbpath (val TEXT)");
+		await singleProc.exec("INSERT INTO rp_no_dbpath (val) VALUES (?)", ["x"]);
+		const rows = await singleProc.query("SELECT val FROM rp_no_dbpath");
+		assert.deepEqual(rows, [{ val: "x" }]);
+		singleProc.close();
+	});
+
+	test("读进程池：onTiming 回调在读进程池查询时也触发", async () => {
+		db.close();
+
+		const timings = [];
+		const timedDb = new SQLiteWrapper(SQLite3BinaryFile, {
+			dbPath: tmpDb,
+			readPoolSize: 2,
+			onTiming: (t) => timings.push(t),
+		});
+
+		await timedDb.exec("CREATE TABLE IF NOT EXISTS rp_timing (val TEXT)");
+		await timedDb.exec("INSERT INTO rp_timing (val) VALUES (?)", ["row1"]);
+		await timedDb.query("SELECT val FROM rp_timing");
+
+		timedDb.close();
+
+		assert.ok(timings.length >= 3, `至少应有 3 条 timing 记录，实际: ${timings.length}`);
+		for (const t of timings) {
+			assert.equal(typeof t.sql, "string");
+			assert.equal(typeof t.isQuery, "boolean");
+			assert.ok(t.status === "fulfilled" || t.status === "rejected");
+			assert.ok(t.queueMs >= 0);
+			assert.ok(t.runMs >= 0);
+			assert.equal(t.totalMs, t.queueMs + t.runMs);
+		}
+	});
+});
+

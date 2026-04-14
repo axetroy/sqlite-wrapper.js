@@ -52,6 +52,17 @@ export interface SQLiteWrapperOptions {
 	onTiming?: (timing: SQLiteWrapperTiming) => void;
 	maxInFlight?: number;
 	maxBatchChars?: number;
+	/**
+	 * 读进程池大小：启用读写分离架构时，创建此数量的只读 sqlite3 进程来并行处理查询。
+	 *
+	 * - 必须为正整数。
+	 * - 需要同时提供文件路径的 `dbPath`（不支持内存数据库）。
+	 * - 启用后，`query()` 调用（事务/排他区外）会路由到读进程池，
+	 *   `exec()`、`run()` 及事务内的所有操作仍由写进程处理。
+	 * - 建议同时开启数据库 WAL 模式（`PRAGMA journal_mode=WAL`）以最大化读写并发性能；
+	 *   指定该选项时会自动执行此 PRAGMA。
+	 */
+	readPoolSize?: number;
 }
 
 export interface SQLiteOperationOptions {
