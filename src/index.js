@@ -39,9 +39,9 @@ export class SQLiteWrapper {
 	// Tasks that arrived while an exclusive zone was active and do not belong to it.
 	// Re-enqueued (with priority) once the zone ends.
 	#deferredQueue = new Queue();
-	#stdoutResult = "";
+	#stdoutResult = [];
 	#stdoutChunkRemainder = "";
-	#stderrResult = "";
+	#stderrResult = [];
 	#stderrChunkRemainder = "";
 	#isWaitingDrain = false;
 	#isFinalizeScheduled = false;
@@ -242,7 +242,8 @@ export class SQLiteWrapper {
 				isQuery,
 				txId,
 				restoredFromDeferred: false,
-				enqueuedAt: this.#now(),
+				dispatched: false,
+				enqueuedAt: this.#onTiming ? performance.now() : 0,
 				dispatchedAt: 0,
 				timingEmitted: false,
 				resolve: (...args) => {
@@ -259,7 +260,7 @@ export class SQLiteWrapper {
 
 			if (signal) {
 				abortHandler = () => {
-					if (task.dispatchedAt === 0) {
+					if (!task.dispatched) {
 						// Task may have been moved to the deferred queue; check both.
 						if (!this.queue.remove(task)) {
 							this.#deferredQueue.remove(task);
@@ -328,7 +329,8 @@ export class SQLiteWrapper {
 				const statement = normalizeSQL(task.sql);
 
 				debug?.("Queue SQL for execution:", statement);
-				task.dispatchedAt = this.#now();
+				task.dispatched = true;
+				task.dispatchedAt = this.#onTiming ? performance.now() : 0;
 				inflight.push(task);
 				inflightCount++;
 
@@ -360,7 +362,8 @@ export class SQLiteWrapper {
 				const statement = normalizeSQL(task.sql);
 
 				debug?.("Queue SQL for execution:", statement);
-				task.dispatchedAt = this.#now();
+				task.dispatched = true;
+				task.dispatchedAt = this.#onTiming ? performance.now() : 0;
 				inflight.push(task);
 				inflightCount++;
 
@@ -396,8 +399,7 @@ export class SQLiteWrapper {
 	#appendStdoutLine(current, line) {
 		if (!current?.isQuery) return;
 
-		if (this.#stdoutResult.length > 0) this.#stdoutResult += EOL;
-		this.#stdoutResult += line;
+		this.#stdoutResult.push(line);
 	}
 
 	/**
@@ -405,8 +407,7 @@ export class SQLiteWrapper {
 	 * @param {string} line
 	 */
 	#appendStderrLine(line) {
-		if (this.#stderrResult.length > 0) this.#stderrResult += EOL;
-		this.#stderrResult += line;
+		this.#stderrResult.push(line);
 	}
 
 	/**
@@ -464,41 +465,31 @@ export class SQLiteWrapper {
 	}
 
 	#handleStdoutChunk(chunk) {
-		let remainder = this.#stdoutChunkRemainder;
-		remainder += chunk;
+		let remainder = this.#stdoutChunkRemainder + chunk;
 
 		let lineStart = 0;
-		for (let i = 0; i < remainder.length; i++) {
-			if (remainder.charCodeAt(i) !== CHAR_LF) continue;
-
-			let endExclusive = i;
-			if (endExclusive > lineStart && remainder.charCodeAt(endExclusive - 1) === CHAR_CR) {
-				endExclusive--;
-			}
-
+		let pos = remainder.indexOf("\n", lineStart);
+		while (pos !== -1) {
+			const endExclusive = pos > lineStart && remainder.charCodeAt(pos - 1) === CHAR_CR ? pos - 1 : pos;
 			this.#handleLine(remainder.slice(lineStart, endExclusive));
-			lineStart = i + 1;
+			lineStart = pos + 1;
+			pos = remainder.indexOf("\n", lineStart);
 		}
 
 		this.#stdoutChunkRemainder = remainder.slice(lineStart);
 	}
 
 	#handleStderrChunk(chunk) {
-		let remainder = this.#stderrChunkRemainder;
-		remainder += chunk;
+		let remainder = this.#stderrChunkRemainder + chunk;
 		const hasInflight = this.#inflight.length > 0;
 
 		let lineStart = 0;
-		for (let i = 0; i < remainder.length; i++) {
-			if (remainder.charCodeAt(i) !== CHAR_LF) continue;
-
-			let endExclusive = i;
-			if (endExclusive > lineStart && remainder.charCodeAt(endExclusive - 1) === CHAR_CR) {
-				endExclusive--;
-			}
-
+		let pos = remainder.indexOf("\n", lineStart);
+		while (pos !== -1) {
+			const endExclusive = pos > lineStart && remainder.charCodeAt(pos - 1) === CHAR_CR ? pos - 1 : pos;
 			this.#appendStderrRange(remainder, lineStart, endExclusive, hasInflight);
-			lineStart = i + 1;
+			lineStart = pos + 1;
+			pos = remainder.indexOf("\n", lineStart);
 		}
 
 		this.#stderrChunkRemainder = remainder.slice(lineStart);
@@ -541,11 +532,11 @@ export class SQLiteWrapper {
 		const current = this.#inflight.shift();
 		if (!current) return;
 
-		const result = current.isQuery ? this.#stdoutResult.trim() : "";
-		const error = this.#stderrResult.trim();
+		const result = current.isQuery ? this.#stdoutResult.join(EOL).trim() : "";
+		const error = this.#stderrResult.join(EOL).trim();
 
-		this.#stdoutResult = "";
-		this.#stderrResult = "";
+		this.#stdoutResult = [];
+		this.#stderrResult = [];
 		if (current.isQuery) this.#queryInFlight--;
 		const { resolve, reject } = current;
 
@@ -574,9 +565,9 @@ export class SQLiteWrapper {
 		}
 
 		this.#activeZoneId = null;
-		this.#stdoutResult = "";
+		this.#stdoutResult = [];
 		this.#stdoutChunkRemainder = "";
-		this.#stderrResult = "";
+		this.#stderrResult = [];
 		this.#stderrChunkRemainder = "";
 		this.#isWaitingDrain = false;
 		this.#isFinalizeScheduled = false;
@@ -597,7 +588,7 @@ export class SQLiteWrapper {
 		if (task.timingEmitted) return;
 		task.timingEmitted = true;
 
-		const finishedAt = this.#now();
+		const finishedAt = performance.now();
 		const dispatchedAt = task.dispatchedAt || finishedAt;
 		const queueMs = Math.max(0, Math.round(dispatchedAt - task.enqueuedAt));
 		const runMs = Math.max(0, Math.round(finishedAt - dispatchedAt));
@@ -613,10 +604,6 @@ export class SQLiteWrapper {
 			runMs,
 			totalMs,
 		});
-	}
-
-	#now() {
-		return performance.now();
 	}
 
 	#normalizePositiveInteger(value, fallback, name) {
