@@ -1,4 +1,4 @@
-exports[`test cjs output 1`] = `
+exports[`测试 CJS 输出 1`] = `
 
 > cjs@1.0.0 test
 > node index.cjs
@@ -7,7 +7,7 @@ exports[`test cjs output 1`] = `
 
 `;
 
-exports[`test esm output 1`] = `
+exports[`测试 ESM 输出 1`] = `
 
 > esm@1.0.0 test
 > node index.mjs
