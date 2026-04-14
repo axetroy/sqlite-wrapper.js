@@ -39,9 +39,9 @@ export class SQLiteWrapper {
 	// Tasks that arrived while an exclusive zone was active and do not belong to it.
 	// Re-enqueued (with priority) once the zone ends.
 	#deferredQueue = new Queue();
-	#stdoutResult = "";
+	#stdoutResult = [];
 	#stdoutChunkRemainder = "";
-	#stderrResult = "";
+	#stderrResult = [];
 	#stderrChunkRemainder = "";
 	#isWaitingDrain = false;
 	#isFinalizeScheduled = false;
@@ -242,7 +242,7 @@ export class SQLiteWrapper {
 				isQuery,
 				txId,
 				restoredFromDeferred: false,
-				enqueuedAt: this.#now(),
+				enqueuedAt: this.#onTiming ? performance.now() : 0,
 				dispatchedAt: 0,
 				timingEmitted: false,
 				resolve: (...args) => {
@@ -328,7 +328,7 @@ export class SQLiteWrapper {
 				const statement = normalizeSQL(task.sql);
 
 				debug?.("Queue SQL for execution:", statement);
-				task.dispatchedAt = this.#now();
+				task.dispatchedAt = this.#onTiming ? performance.now() : 0;
 				inflight.push(task);
 				inflightCount++;
 
@@ -360,7 +360,7 @@ export class SQLiteWrapper {
 				const statement = normalizeSQL(task.sql);
 
 				debug?.("Queue SQL for execution:", statement);
-				task.dispatchedAt = this.#now();
+				task.dispatchedAt = this.#onTiming ? performance.now() : 0;
 				inflight.push(task);
 				inflightCount++;
 
@@ -396,8 +396,7 @@ export class SQLiteWrapper {
 	#appendStdoutLine(current, line) {
 		if (!current?.isQuery) return;
 
-		if (this.#stdoutResult.length > 0) this.#stdoutResult += EOL;
-		this.#stdoutResult += line;
+		this.#stdoutResult.push(line);
 	}
 
 	/**
@@ -405,8 +404,7 @@ export class SQLiteWrapper {
 	 * @param {string} line
 	 */
 	#appendStderrLine(line) {
-		if (this.#stderrResult.length > 0) this.#stderrResult += EOL;
-		this.#stderrResult += line;
+		this.#stderrResult.push(line);
 	}
 
 	/**
@@ -519,20 +517,16 @@ export class SQLiteWrapper {
 	#restoreDeferred() {
 		if (this.#deferredQueue.isEmpty()) return;
 
-		// Prepend deferred tasks before whatever is currently in the main queue,
-		// preserving their original relative order.
-		const remaining = this.queue.toArray();
-		this.queue.clear();
-		while (!this.#deferredQueue.isEmpty()) {
-			const task = this.#deferredQueue.dequeue();
+		// Mark all deferred tasks before prepending them.
+		for (const task of this.#deferredQueue) {
 			// Mark with a dedicated flag rather than overwriting txId, so the
 			// original transaction association is preserved for any other consumers.
 			task.restoredFromDeferred = true;
-			this.queue.enqueue(task);
 		}
-		for (const task of remaining) {
-			this.queue.enqueue(task);
-		}
+
+		// Prepend deferred tasks before whatever is currently in the main queue,
+		// preserving their original relative order.  #deferredQueue is cleared by prepend.
+		this.queue.prepend(this.#deferredQueue);
 		this.#schedulePumpQueue();
 	}
 
@@ -541,11 +535,11 @@ export class SQLiteWrapper {
 		const current = this.#inflight.shift();
 		if (!current) return;
 
-		const result = current.isQuery ? this.#stdoutResult.trim() : "";
-		const error = this.#stderrResult.trim();
+		const result = current.isQuery ? this.#stdoutResult.join(EOL).trim() : "";
+		const error = this.#stderrResult.join(EOL).trim();
 
-		this.#stdoutResult = "";
-		this.#stderrResult = "";
+		this.#stdoutResult = [];
+		this.#stderrResult = [];
 		if (current.isQuery) this.#queryInFlight--;
 		const { resolve, reject } = current;
 
@@ -574,9 +568,9 @@ export class SQLiteWrapper {
 		}
 
 		this.#activeZoneId = null;
-		this.#stdoutResult = "";
+		this.#stdoutResult = [];
 		this.#stdoutChunkRemainder = "";
-		this.#stderrResult = "";
+		this.#stderrResult = [];
 		this.#stderrChunkRemainder = "";
 		this.#isWaitingDrain = false;
 		this.#isFinalizeScheduled = false;
@@ -597,7 +591,7 @@ export class SQLiteWrapper {
 		if (task.timingEmitted) return;
 		task.timingEmitted = true;
 
-		const finishedAt = this.#now();
+		const finishedAt = performance.now();
 		const dispatchedAt = task.dispatchedAt || finishedAt;
 		const queueMs = Math.max(0, Math.round(dispatchedAt - task.enqueuedAt));
 		const runMs = Math.max(0, Math.round(finishedAt - dispatchedAt));
@@ -613,10 +607,6 @@ export class SQLiteWrapper {
 			runMs,
 			totalMs,
 		});
-	}
-
-	#now() {
-		return performance.now();
 	}
 
 	#normalizePositiveInteger(value, fallback, name) {
