@@ -28,6 +28,10 @@ const CHAR_TAB = 9;
 
 const VALID_TRANSACTION_TYPES = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"];
 
+// Maximum number of task objects retained in the per-instance pool.
+// Sized at 2× the default max-in-flight to cover steady-state cycling.
+const TASK_POOL_MAX_SIZE = 256;
+
 export class SQLiteWrapper {
 	queue = new Queue();
 	#inflight = [];
@@ -49,6 +53,10 @@ export class SQLiteWrapper {
 	#queryInFlight = 0;
 	#maxInFlight = DEFAULT_MAX_IN_FLIGHT;
 	#maxBatchChars = DEFAULT_MAX_BATCH_CHARS;
+	// Reusable array for #pumpQueue payload construction; avoids per-pump allocation.
+	#payloadParts = [];
+	// Object pool for task descriptors; reduces GC pressure under high-frequency use.
+	#taskPool = [];
 	#proc;
 	#logger;
 	#onTiming;
@@ -237,25 +245,27 @@ export class SQLiteWrapper {
 		return new Promise((resolve, reject) => {
 			let abortHandler = null;
 
-			const task = {
-				sql: formatted,
-				isQuery,
-				txId,
-				restoredFromDeferred: false,
-				dispatched: false,
-				enqueuedAt: this.#onTiming ? performance.now() : 0,
-				dispatchedAt: 0,
-				timingEmitted: false,
-				resolve: (...args) => {
-					if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
-					this.#emitTiming(task, "fulfilled");
-					resolve(...args);
-				},
-				reject: (...args) => {
-					if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
-					this.#emitTiming(task, "rejected");
-					reject(...args);
-				},
+			// Acquire a task object from the pool (or allocate a new one).
+			const task = this.#acquireTask();
+			task.sql = formatted;
+			task.isQuery = isQuery;
+			task.txId = txId;
+			task.restoredFromDeferred = false;
+			task.dispatched = false;
+			task.enqueuedAt = this.#onTiming ? performance.now() : 0;
+			task.dispatchedAt = 0;
+			task.timingEmitted = false;
+			task.resolve = (...args) => {
+				if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
+				this.#emitTiming(task, "fulfilled");
+				resolve(...args);
+				this.#releaseTask(task);
+			};
+			task.reject = (...args) => {
+				if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
+				this.#emitTiming(task, "rejected");
+				reject(...args);
+				this.#releaseTask(task);
 			};
 
 			if (signal) {
@@ -280,6 +290,28 @@ export class SQLiteWrapper {
 		});
 	}
 
+	// Acquire a task descriptor from the pool, or allocate a fresh plain object.
+	#acquireTask() {
+		return this.#taskPool.length > 0 ? this.#taskPool.pop() : {};
+	}
+
+	// Reset a task descriptor and return it to the pool for reuse.
+	// Called at the end of task.resolve() and task.reject() wrappers.
+	#releaseTask(task) {
+		if (this.#taskPool.length >= TASK_POOL_MAX_SIZE) return;
+		task.sql = null;
+		task.isQuery = false;
+		task.txId = null;
+		task.restoredFromDeferred = false;
+		task.dispatched = false;
+		task.enqueuedAt = 0;
+		task.dispatchedAt = 0;
+		task.timingEmitted = false;
+		task.resolve = null;
+		task.reject = null;
+		this.#taskPool.push(task);
+	}
+
 	#schedulePumpQueue() {
 		if (this.#closed || this.#isPumpScheduled) return;
 		this.#isPumpScheduled = true;
@@ -298,6 +330,8 @@ export class SQLiteWrapper {
 	 *   so writing strings avoids extra Buffer/Uint8Array creation per batch.
 	 * - In this path, Buffer/Uint8Array usually adds one more conversion/copy and
 	 *   increases GC pressure under high-frequency writes.
+	 * - #payloadParts is a class-level reusable array; resetting via .length = 0 avoids
+	 *   per-pump allocation and keeps the backing slots warm for the JIT.
 	 */
 	#pumpQueue() {
 		if (this.#closed || this.#isWaitingDrain || this.#queryInFlight > 0) return;
@@ -311,7 +345,9 @@ export class SQLiteWrapper {
 		const debug = this.#logger?.debug;
 		const activeId = this.#activeZoneId;
 
-		const payloadParts = [];
+		// Reuse the class-level array to avoid per-pump allocation.
+		const payloadParts = this.#payloadParts;
+		payloadParts.length = 0;
 		let payloadChars = 0;
 		let inflightCount = inflight.length;
 
@@ -458,41 +494,82 @@ export class SQLiteWrapper {
 		if (this.#isFinalizeScheduled) return;
 		this.#isFinalizeScheduled = true;
 
-		setImmediate(() => {
+		// queueMicrotask runs before any I/O event, giving the next query a head-start
+		// over setImmediate (which runs after the I/O polling phase).  This is safe
+		// because sqlite3 emits the END marker only after all result rows for the
+		// current query have been flushed; no further stdout data for this query can
+		// arrive after we schedule here.
+		queueMicrotask(() => {
 			this.#isFinalizeScheduled = false;
 			this.#finalizeCurrent();
 		});
 	}
 
 	#handleStdoutChunk(chunk) {
-		const remainder = this.#stdoutChunkRemainder ? this.#stdoutChunkRemainder + chunk : chunk;
+		let chunkStart = 0;
 
-		let lineStart = 0;
-		let pos = remainder.indexOf("\n", lineStart);
-		while (pos !== -1) {
-			const endExclusive = pos > lineStart && remainder.charCodeAt(pos - 1) === CHAR_CR ? pos - 1 : pos;
-			this.#handleLine(remainder.slice(lineStart, endExclusive));
-			lineStart = pos + 1;
-			pos = remainder.indexOf("\n", lineStart);
+		// Complete a partial line carried over from the previous chunk, if any.
+		// We only concatenate the minimal prefix needed to finish that one line,
+		// then scan the rest of `chunk` directly — avoiding the large
+		// `remainder + chunk` string the original code allocated per event.
+		if (this.#stdoutChunkRemainder) {
+			const nlPos = chunk.indexOf("\n");
+			if (nlPos === -1) {
+				// No newline yet; keep accumulating the partial line.
+				this.#stdoutChunkRemainder += chunk;
+				return;
+			}
+			// Build just the first line: remainder + head of chunk up to (and including)
+			// the newline, so the CR check can inspect both sides of the chunk boundary.
+			const combined = this.#stdoutChunkRemainder + chunk.slice(0, nlPos + 1);
+			const nl = combined.length - 1;
+			const lineEnd = nl > 0 && combined.charCodeAt(nl - 1) === CHAR_CR ? nl - 1 : nl;
+			this.#handleLine(combined.slice(0, lineEnd));
+			this.#stdoutChunkRemainder = "";
+			chunkStart = nlPos + 1;
 		}
 
-		this.#stdoutChunkRemainder = remainder.slice(lineStart);
+		// Scan the remainder of the chunk directly — no extra allocation.
+		let pos = chunk.indexOf("\n", chunkStart);
+		while (pos !== -1) {
+			const lineEnd = pos > chunkStart && chunk.charCodeAt(pos - 1) === CHAR_CR ? pos - 1 : pos;
+			this.#handleLine(chunk.slice(chunkStart, lineEnd));
+			chunkStart = pos + 1;
+			pos = chunk.indexOf("\n", chunkStart);
+		}
+
+		this.#stdoutChunkRemainder = chunk.slice(chunkStart);
 	}
 
 	#handleStderrChunk(chunk) {
-		const remainder = this.#stderrChunkRemainder ? this.#stderrChunkRemainder + chunk : chunk;
 		const hasInflight = this.#inflight.length > 0;
+		let chunkStart = 0;
 
-		let lineStart = 0;
-		let pos = remainder.indexOf("\n", lineStart);
-		while (pos !== -1) {
-			const endExclusive = pos > lineStart && remainder.charCodeAt(pos - 1) === CHAR_CR ? pos - 1 : pos;
-			this.#appendStderrRange(remainder, lineStart, endExclusive, hasInflight);
-			lineStart = pos + 1;
-			pos = remainder.indexOf("\n", lineStart);
+		// Same split-chunk optimization as #handleStdoutChunk: only concatenate the
+		// minimal prefix needed to complete the partial line from the previous chunk.
+		if (this.#stderrChunkRemainder) {
+			const nlPos = chunk.indexOf("\n");
+			if (nlPos === -1) {
+				this.#stderrChunkRemainder += chunk;
+				return;
+			}
+			const combined = this.#stderrChunkRemainder + chunk.slice(0, nlPos + 1);
+			const nl = combined.length - 1;
+			const lineEnd = nl > 0 && combined.charCodeAt(nl - 1) === CHAR_CR ? nl - 1 : nl;
+			this.#appendStderrRange(combined, 0, lineEnd, hasInflight);
+			this.#stderrChunkRemainder = "";
+			chunkStart = nlPos + 1;
 		}
 
-		this.#stderrChunkRemainder = remainder.slice(lineStart);
+		let pos = chunk.indexOf("\n", chunkStart);
+		while (pos !== -1) {
+			const lineEnd = pos > chunkStart && chunk.charCodeAt(pos - 1) === CHAR_CR ? pos - 1 : pos;
+			this.#appendStderrRange(chunk, chunkStart, lineEnd, hasInflight);
+			chunkStart = pos + 1;
+			pos = chunk.indexOf("\n", chunkStart);
+		}
+
+		this.#stderrChunkRemainder = chunk.slice(chunkStart);
 	}
 
 	#flushStderrRemainder() {
