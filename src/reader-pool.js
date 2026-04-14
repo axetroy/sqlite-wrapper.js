@@ -353,7 +353,7 @@ export class ReaderPool {
 		this.#closed = true;
 		this.#logger?.error("sqlite3 读取进程错误:", err);
 
-		const error = new Error("sqlite3 reader process error: " + err.message, { cause: err });
+		const error = new Error("sqlite3 读取进程错误: " + err.message, { cause: err });
 
 		while (!this.#pendingQueue.isEmpty()) {
 			const task = this.#pendingQueue.dequeue();

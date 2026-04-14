@@ -71,7 +71,9 @@ export class SQLiteWrapper {
 		if (readPoolSize !== undefined) {
 			if (dbPath && dbPath !== ":memory:") {
 				// 自动开启 WAL 模式，使读写进程可并发访问数据库
-				this.exec("PRAGMA journal_mode=WAL").catch(() => {});
+				this.exec("PRAGMA journal_mode=WAL").catch((err) => {
+					this.#logger?.error("读进程池：无法开启 WAL 模式，读写并发性能可能受影响:", err);
+				});
 				this.#readerPool = new ReaderPool(readPoolSize, sqlite3ExePath, dbPath, { onTiming, logger });
 			} else {
 				this.#logger?.warn(
