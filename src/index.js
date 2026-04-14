@@ -122,7 +122,7 @@ export class SQLiteWrapper {
 	async #runWithTxId(sql, params, options, txId) {
 		const sqlWithMeta = sql + ";\nSELECT changes() as changes, last_insert_rowid() as lastInsertRowid;";
 		const raw = await this.#enqueueSQL(sqlWithMeta, params, { isQuery: true, signal: options?.signal, txId });
-		if (!raw.trim()) return { changes: 0, lastInsertRowid: 0 };
+		if (!raw) return { changes: 0, lastInsertRowid: 0 };
 
 		try {
 			const result = JSON.parse(raw);
@@ -142,7 +142,7 @@ export class SQLiteWrapper {
 
 	async #queryWithTxId(sql, params, options, txId) {
 		const raw = await this.#enqueueSQL(sql, params, { isQuery: true, signal: options?.signal, txId });
-		if (!raw.trim()) return [];
+		if (!raw) return [];
 
 		try {
 			return JSON.parse(raw);
@@ -465,7 +465,7 @@ export class SQLiteWrapper {
 	}
 
 	#handleStdoutChunk(chunk) {
-		let remainder = this.#stdoutChunkRemainder + chunk;
+		const remainder = this.#stdoutChunkRemainder ? this.#stdoutChunkRemainder + chunk : chunk;
 
 		let lineStart = 0;
 		let pos = remainder.indexOf("\n", lineStart);
@@ -480,7 +480,7 @@ export class SQLiteWrapper {
 	}
 
 	#handleStderrChunk(chunk) {
-		let remainder = this.#stderrChunkRemainder + chunk;
+		const remainder = this.#stderrChunkRemainder ? this.#stderrChunkRemainder + chunk : chunk;
 		const hasInflight = this.#inflight.length > 0;
 
 		let lineStart = 0;
@@ -510,20 +510,16 @@ export class SQLiteWrapper {
 	#restoreDeferred() {
 		if (this.#deferredQueue.isEmpty()) return;
 
+		// Mark every deferred task before merging so the pump loop lets them through.
+		for (const task of this.#deferredQueue) {
+			task.restoredFromDeferred = true;
+		}
+
 		// Prepend deferred tasks before whatever is currently in the main queue,
 		// preserving their original relative order.
-		const remaining = this.queue.toArray();
-		this.queue.clear();
-		while (!this.#deferredQueue.isEmpty()) {
-			const task = this.#deferredQueue.dequeue();
-			// Mark with a dedicated flag rather than overwriting txId, so the
-			// original transaction association is preserved for any other consumers.
-			task.restoredFromDeferred = true;
-			this.queue.enqueue(task);
-		}
-		for (const task of remaining) {
-			this.queue.enqueue(task);
-		}
+		// prependAll() is O(n) and avoids an intermediate array allocation + repeated
+		// enqueue() calls that the previous toArray()+clear()+enqueue loop required.
+		this.queue.prependAll(this.#deferredQueue);
 		this.#schedulePumpQueue();
 	}
 
@@ -533,7 +529,7 @@ export class SQLiteWrapper {
 		if (!current) return;
 
 		const result = current.isQuery ? this.#stdoutResult.join(EOL).trim() : "";
-		const error = this.#stderrResult.join(EOL).trim();
+		const error = this.#stderrResult.length > 0 ? this.#stderrResult.join(EOL).trim() : "";
 
 		this.#stdoutResult = [];
 		this.#stderrResult = [];

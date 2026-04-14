@@ -45,11 +45,13 @@ export class Queue {
 	}
 
 	clear() {
-		this.#items = new Array(INITIAL_CAPACITY);
+		// Reuse the existing backing array (avoids allocation + GC pressure on hot paths
+		// such as #restoreDeferred which calls clear() on every exclusive-zone exit).
+		// #mask stays valid: it equals #items.length - 1 and the array length is unchanged.
+		this.#items.fill(undefined);
 		this.#head = 0;
 		this.#tail = 0;
 		this.#size = 0;
-		this.#mask = INITIAL_CAPACITY - 1;
 	}
 
 	remove(value) {
@@ -94,6 +96,61 @@ export class Queue {
 
 	peek() {
 		return this.#size > 0 ? this.#items[this.#head] : null;
+	}
+
+	/**
+	 * Prepend all items from another Queue in front of this queue's existing items,
+	 * preserving the donor queue's order. The donor queue is emptied in the process.
+	 * This is more efficient than toArray() + clear() + repeated enqueue() because it
+	 * avoids allocating an intermediate array and minimises enqueue call overhead.
+	 * @param {Queue} other
+	 */
+	prependAll(other) {
+		if (other.isEmpty()) return;
+
+		// Fast path: this queue is empty — just swap internals.
+		if (this.#size === 0) {
+			const tmpItems = this.#items;
+			const tmpMask = this.#mask;
+			this.#items = other.#items;
+			this.#head = other.#head;
+			this.#tail = other.#tail;
+			this.#size = other.#size;
+			this.#mask = other.#mask;
+			other.#items = tmpItems;
+			other.#head = 0;
+			other.#tail = 0;
+			other.#size = 0;
+			other.#mask = tmpMask;
+			return;
+		}
+
+		// General path: merge both queues into a new array so the donor's items
+		// come first, followed by this queue's existing items.
+		const totalSize = this.#size + other.#size;
+		let newCap = this.#items.length;
+		while (newCap < totalSize) newCap *= 2;
+
+		const newItems = new Array(newCap);
+		let writeIdx = 0;
+
+		for (let i = 0; i < other.#size; i++) {
+			newItems[writeIdx++] = other.#items[(other.#head + i) & other.#mask];
+		}
+		for (let i = 0; i < this.#size; i++) {
+			newItems[writeIdx++] = this.#items[(this.#head + i) & this.#mask];
+		}
+
+		this.#items = newItems;
+		this.#head = 0;
+		this.#tail = totalSize;
+		this.#size = totalSize;
+		this.#mask = newCap - 1;
+
+		other.#items.fill(undefined);
+		other.#head = 0;
+		other.#tail = 0;
+		other.#size = 0;
 	}
 
 	[Symbol.iterator]() {

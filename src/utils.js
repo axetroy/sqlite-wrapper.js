@@ -50,7 +50,6 @@ export function interpolateSQL(sql, params) {
 
 	for (let pos = 0; pos < sql.length; pos++) {
 		const code = sql.charCodeAt(pos);
-		const nextCode = sql.charCodeAt(pos + 1);
 
 		if (state === STATE_NORMAL) {
 			if (code === CC_SINGLE_QUOTE) {
@@ -65,13 +64,13 @@ export function interpolateSQL(sql, params) {
 				continue;
 			}
 
-			if (code === CC_DASH && nextCode === CC_DASH) {
+			if (code === CC_DASH && sql.charCodeAt(pos + 1) === CC_DASH) {
 				state = STATE_LINE_COMMENT;
 				pos++;
 				continue;
 			}
 
-			if (code === CC_SLASH && nextCode === CC_STAR) {
+			if (code === CC_SLASH && sql.charCodeAt(pos + 1) === CC_STAR) {
 				state = STATE_BLOCK_COMMENT;
 				stateStartPos = pos;
 				pos++;
@@ -90,12 +89,11 @@ export function interpolateSQL(sql, params) {
 		}
 
 		if (state === STATE_SINGLE_QUOTE) {
-			if (code === CC_SINGLE_QUOTE && nextCode === CC_SINGLE_QUOTE) {
-				pos++;
-				continue;
-			}
-
 			if (code === CC_SINGLE_QUOTE) {
+				if (sql.charCodeAt(pos + 1) === CC_SINGLE_QUOTE) {
+					pos++;
+					continue;
+				}
 				state = STATE_NORMAL;
 				stateStartPos = -1;
 			}
@@ -103,12 +101,11 @@ export function interpolateSQL(sql, params) {
 		}
 
 		if (state === STATE_DOUBLE_QUOTE) {
-			if (code === CC_DOUBLE_QUOTE && nextCode === CC_DOUBLE_QUOTE) {
-				pos++;
-				continue;
-			}
-
 			if (code === CC_DOUBLE_QUOTE) {
+				if (sql.charCodeAt(pos + 1) === CC_DOUBLE_QUOTE) {
+					pos++;
+					continue;
+				}
 				state = STATE_NORMAL;
 				stateStartPos = -1;
 			}
@@ -121,7 +118,7 @@ export function interpolateSQL(sql, params) {
 		}
 
 		if (state === STATE_BLOCK_COMMENT) {
-			if (code === CC_STAR && nextCode === CC_SLASH) {
+			if (code === CC_STAR && sql.charCodeAt(pos + 1) === CC_SLASH) {
 				pos++;
 				state = STATE_NORMAL;
 				stateStartPos = -1;
