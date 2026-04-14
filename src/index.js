@@ -241,6 +241,7 @@ export class SQLiteWrapper {
 				sql: formatted,
 				isQuery,
 				txId,
+				restoredFromDeferred: false,
 				enqueuedAt: this.#now(),
 				dispatchedAt: 0,
 				timingEmitted: false,
@@ -313,40 +314,65 @@ export class SQLiteWrapper {
 		let payloadChars = 0;
 		let inflightCount = inflight.length;
 
-		while (!queue.isEmpty() && inflightCount < maxInFlight && payloadChars < maxBatchChars) {
-			const nextTask = queue.peek();
-			if (!nextTask) break;
+		if (activeId === null) {
+			// Hot path: no exclusive zone active — skip all zone-deferral logic.
+			while (!queue.isEmpty() && inflightCount < maxInFlight && payloadChars < maxBatchChars) {
+				const nextTask = queue.peek();
+				if (!nextTask) break;
 
-			// When an exclusive zone is active, defer any task that does not belong to it.
-			// Tasks that were previously deferred and re-enqueued (restoredFromDeferred)
-			// bypass this check and are never deferred a second time.
-			if (activeId !== null && nextTask.txId !== activeId && !nextTask.restoredFromDeferred) {
-				this.#deferredQueue.enqueue(queue.dequeue());
-				continue;
+				// Equivalent to the former early-return guard:
+				// `if (inflight.length > 0 && queue.peek()?.isQuery) return;`
+				if (nextTask.isQuery && inflightCount > 0) break;
+
+				const task = queue.dequeue();
+				const statement = normalizeSQL(task.sql);
+
+				debug?.("Queue SQL for execution:", statement);
+				task.dispatchedAt = this.#now();
+				inflight.push(task);
+				inflightCount++;
+
+				if (task.isQuery) {
+					this.#queryInFlight++;
+				}
+
+				payloadParts.push(statement, END_SIGNAL);
+				payloadChars += statement.length + END_PACKET_CHARS;
+
+				if (task.isQuery) break;
 			}
+		} else {
+			// Slow path: exclusive zone active — defer tasks that don't belong to it.
+			while (!queue.isEmpty() && inflightCount < maxInFlight && payloadChars < maxBatchChars) {
+				const nextTask = queue.peek();
+				if (!nextTask) break;
 
-			// Equivalent to the former early-return guard
-		// `if (inflight.length > 0 && queue.peek()?.isQuery) return;`
-		// but evaluated after deferral so we test the first eligible task, not just
-		// whatever happens to be at the head of the queue.
-		if (nextTask.isQuery && inflightCount > 0) break;
+				// Defer any task that does not belong to the active zone.
+				// Tasks restored from the deferred queue bypass this check.
+				if (nextTask.txId !== activeId && !nextTask.restoredFromDeferred) {
+					this.#deferredQueue.enqueue(queue.dequeue());
+					continue;
+				}
 
-			const task = queue.dequeue();
-			const statement = normalizeSQL(task.sql);
+				if (nextTask.isQuery && inflightCount > 0) break;
 
-			debug?.("Queue SQL for execution:", statement);
-			task.dispatchedAt = this.#now();
-			inflight.push(task);
-			inflightCount++;
+				const task = queue.dequeue();
+				const statement = normalizeSQL(task.sql);
 
-			if (task.isQuery) {
-				this.#queryInFlight++;
+				debug?.("Queue SQL for execution:", statement);
+				task.dispatchedAt = this.#now();
+				inflight.push(task);
+				inflightCount++;
+
+				if (task.isQuery) {
+					this.#queryInFlight++;
+				}
+
+				payloadParts.push(statement, END_SIGNAL);
+				payloadChars += statement.length + END_PACKET_CHARS;
+
+				if (task.isQuery) break;
 			}
-
-			payloadParts.push(statement, END_SIGNAL);
-			payloadChars += statement.length + END_PACKET_CHARS;
-
-			if (task.isQuery) break;
 		}
 
 		if (payloadParts.length === 0) return;
