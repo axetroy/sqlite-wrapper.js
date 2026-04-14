@@ -16,7 +16,7 @@ before(() => {
 	});
 });
 
-test("test esm output", (t) => {
+test("测试 ESM 输出", (t) => {
 	const targetDir = path.join(rootDir, "fixtures", "esm");
 
 	execSync("yarn", { cwd: targetDir, stdio: "inherit" });
@@ -35,7 +35,7 @@ test("test esm output", (t) => {
 	});
 });
 
-test("test cjs output", (t) => {
+test("测试 CJS 输出", (t) => {
 	const targetDir = path.join(rootDir, "fixtures", "cjs");
 
 	execSync("yarn", { cwd: targetDir, stdio: "inherit" });

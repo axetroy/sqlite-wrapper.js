@@ -9,11 +9,11 @@ import { which } from "./which.js";
 const isWindows = os.platform() === "win32";
 
 describe("which", () => {
-	test("returns null for empty command", () => {
+	test("空命令返回 null", () => {
 		assert.equal(which(""), null);
 	});
 
-	test("finds executable by absolute path", () => {
+	test("通过绝对路径找到可执行文件", () => {
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "which-path-"));
 		const filename = isWindows ? "tool.cmd" : "tool";
 		const filePath = path.join(tmpDir, filename);
@@ -29,7 +29,7 @@ describe("which", () => {
 		}
 	});
 
-	test("finds executable from PATH", () => {
+	test("从 PATH 中找到可执行文件", () => {
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "which-path-"));
 		const name = "my-tool";
 		const filename = isWindows ? `${name}.cmd` : name;
@@ -49,7 +49,7 @@ describe("which", () => {
 		}
 	});
 
-	test("returns null when command not found", () => {
+	test("命令未找到时返回 null", () => {
 		const originalPath = process.env.PATH;
 		process.env.PATH = "";
 

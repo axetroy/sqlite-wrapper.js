@@ -18,6 +18,8 @@ It uses the SQLite3 executable file for database operations and it's **zero-depe
 - 📝 **TypeScript support** - Full TypeScript type definitions included
 - 🔄 **Promise-based API** - Modern async/await interface
 - 📦 **Dual module support** - Works with both ESM and CommonJS
+- 🔐 **Serialized transactions** - `transaction()` wraps work in `BEGIN … COMMIT / ROLLBACK` and serializes concurrent callers
+- 🏷️ **Exclusive zones** - `exclusive()` provides a serialized critical section without the overhead of a SQLite transaction
 
 ## Requirements
 
@@ -150,6 +152,47 @@ Closes the SQLite3 process. Always call this when done with the database.
 ```js
 await sqlite.close();
 ```
+
+##### `exclusive(fn)`
+
+Runs `fn` inside a serialized exclusive zone. While the zone is active, **only SQL issued through the provided `zone` handle executes**; all other SQL (bare `exec`/`run`/`query` calls or SQL from another `exclusive`/`transaction` call) is automatically deferred and re-enqueued once the zone ends.
+
+Concurrent `exclusive()` calls are automatically serialized — they never interleave.
+
+```js
+const result = await sqlite.exclusive(async (zone) => {
+	const [row] = await zone.query("SELECT balance FROM accounts WHERE id = ?", [1]);
+	const newBalance = row.balance - 100;
+	await zone.exec("UPDATE accounts SET balance = ? WHERE id = ?", [newBalance, 1]);
+	return newBalance;
+});
+```
+
+> **Do not** call `db.exclusive()` or `db.transaction()` recursively inside the callback — this will deadlock.
+
+| Parameter | Type | Description |
+| --------- | ---- | ----------- |
+| `fn` | `(zone: ExclusiveZone) => Promise<T>` | Async callback receiving a restricted `zone` handle (`exec`, `run`, `query`) |
+| **Returns** | `Promise<T>` | Value returned by `fn` |
+
+##### `transaction(fn, type?)`
+
+Runs `fn` inside a serialized SQLite transaction (`BEGIN … COMMIT`). If `fn` throws, the transaction is automatically rolled back and the error is re-thrown.
+
+Built on top of `exclusive()` — concurrent calls are serialized automatically.
+
+```js
+const { lastInsertRowid } = await sqlite.transaction(async (tx) => {
+	await tx.exec("INSERT INTO orders (user_id) VALUES (?)", [42]);
+	return tx.run("INSERT INTO order_items (order_id, product) VALUES (last_insert_rowid(), ?)", ["Widget"]);
+});
+```
+
+| Parameter | Type | Description |
+| --------- | ---- | ----------- |
+| `fn` | `(tx: Transaction) => Promise<T>` | Async callback receiving a restricted `tx` handle (`exec`, `run`, `query`) |
+| `type` | `"DEFERRED" \| "IMMEDIATE" \| "EXCLUSIVE"` | (Optional, default `"DEFERRED"`) SQLite transaction isolation level |
+| **Returns** | `Promise<T>` | Value returned by `fn` |
 
 ### Utility Functions
 
@@ -330,6 +373,61 @@ await sqlite.exec(
 `,
 	["Alice", "Bob"],
 );
+
+await sqlite.close();
+```
+
+### Using Transactions
+
+`transaction()` wraps a block of SQL in `BEGIN … COMMIT / ROLLBACK`. Concurrent callers are automatically serialized so transactions never interleave.
+
+```js
+import { SQLiteWrapper } from "sqlite-wrapper.js";
+
+const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", { dbPath: "./bank.db" });
+
+await sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, balance INTEGER);
+  INSERT INTO accounts VALUES (1, 1000);
+  INSERT INTO accounts VALUES (2, 500);
+`);
+
+// Transfer 200 from account 1 to account 2 atomically
+await sqlite.transaction(async (tx) => {
+	await tx.exec("UPDATE accounts SET balance = balance - ? WHERE id = ?", [200, 1]);
+	await tx.exec("UPDATE accounts SET balance = balance + ? WHERE id = ?", [200, 2]);
+});
+
+// Use IMMEDIATE to acquire a write lock up-front
+await sqlite.transaction(async (tx) => {
+	const [row] = await tx.query("SELECT balance FROM accounts WHERE id = ?", [1]);
+	await tx.exec("UPDATE accounts SET balance = ? WHERE id = ?", [row.balance * 2, 1]);
+}, "IMMEDIATE");
+
+await sqlite.close();
+```
+
+### Using Exclusive Zones
+
+`exclusive()` gives you a serialized critical section without the overhead of a SQLite transaction. Use it when you need to read-then-write atomically at the application level.
+
+```js
+import { SQLiteWrapper } from "sqlite-wrapper.js";
+
+const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", { dbPath: "./app.db" });
+
+// Safe increment even if called concurrently
+async function incrementCounter(id) {
+	return sqlite.exclusive(async (zone) => {
+		const [row] = await zone.query("SELECT count FROM counters WHERE id = ?", [id]);
+		const next = (row?.count ?? 0) + 1;
+		await zone.exec("UPDATE counters SET count = ? WHERE id = ?", [next, id]);
+		return next;
+	});
+}
+
+// Both calls are serialized — the second waits for the first to finish
+await Promise.all([incrementCounter(1), incrementCounter(1)]);
 
 await sqlite.close();
 ```
