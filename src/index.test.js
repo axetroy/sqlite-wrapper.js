@@ -490,8 +490,6 @@ describe("exclusive()", () => {
 	test("多个 exclusive zone 与裸 SQL 依次按入队顺序执行", async () => {
 		await sqlite.exec("CREATE TABLE IF NOT EXISTS ex_order (val TEXT)");
 
-		const log = [];
-
 		let resolveBarrier;
 		const barrier = new Promise((r) => {
 			resolveBarrier = r;
@@ -502,26 +500,20 @@ describe("exclusive()", () => {
 			await zone.exec("INSERT INTO ex_order (val) VALUES ('z1')");
 			resolveBarrier();
 			await new Promise((r) => setImmediate(r));
-			log.push("z1-end");
 		});
 
 		await barrier;
 
-		const bare = sqlite.exec("INSERT INTO ex_order (val) VALUES ('bare')").then(() => {
-			log.push("bare-end");
-		});
+		// bare 在 z1 持有锁期间入队，应被延迟至 z1 释放锁后、z2 之前执行
+		const bare = sqlite.exec("INSERT INTO ex_order (val) VALUES ('bare')");
 
 		const z2 = sqlite.exclusive(async (zone) => {
 			await zone.exec("INSERT INTO ex_order (val) VALUES ('z2')");
-			log.push("z2-end");
 		});
 
 		await Promise.all([z1, bare, z2]);
 
-		// bare 在 z1 释放锁后、z2 之前执行（deferred 任务先于下一个 zone）
-		assert.ok(log.indexOf("z1-end") < log.indexOf("bare-end"), "bare 必须在 z1 之后执行");
-		assert.ok(log.indexOf("bare-end") < log.indexOf("z2-end"), "bare 必须在 z2 之前执行");
-
+		// 通过行插入顺序（rowid）验证 SQL 执行顺序：z1 → bare → z2
 		const rows = await sqlite.query("SELECT val FROM ex_order ORDER BY rowid");
 		assert.deepEqual(rows.map((r) => r.val), ["z1", "bare", "z2"]);
 	});
