@@ -531,8 +531,9 @@ export class SQLiteWrapper {
 		const result = current.isQuery ? this.#stdoutResult.join(EOL).trim() : "";
 		const error = this.#stderrResult.length > 0 ? this.#stderrResult.join(EOL).trim() : "";
 
-		this.#stdoutResult = [];
-		this.#stderrResult = [];
+		// Reuse the existing arrays to avoid repeated allocate/GC pressure under high-frequency queries.
+		this.#stdoutResult.length = 0;
+		this.#stderrResult.length = 0;
 		if (current.isQuery) this.#queryInFlight--;
 		const { resolve, reject } = current;
 

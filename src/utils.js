@@ -154,7 +154,28 @@ let _normBuf = new Uint16Array(1024);
 // If big-endian support is ever needed, switch to String.fromCharCode in a loop.
 const _normDecoder = new TextDecoder("utf-16le");
 
+// LRU cache for normalizeSQL: skips repeated full-string scans for high-frequency SQL
+// such as BEGIN/COMMIT/ROLLBACK or fixed-template queries.
+// Map insertion order provides simple LRU semantics: on hit, move the entry to the end;
+// when the cache is full, evict the oldest entry (first key in the Map).
+// Only SQL strings up to _NORM_CACHE_MAX_KEY_LEN characters are cached to avoid
+// retaining large strings in memory.
+const _NORM_CACHE_MAX_SIZE = 256;
+const _NORM_CACHE_MAX_KEY_LEN = 4096;
+const _normCache = new Map();
+
 export function normalizeSQL(sql) {
+	// Check the cache before scanning for short SQL strings.
+	// On hit, promote the entry to the end to maintain LRU order.
+	if (sql.length <= _NORM_CACHE_MAX_KEY_LEN) {
+		const cached = _normCache.get(sql);
+		if (cached !== undefined) {
+			_normCache.delete(sql);
+			_normCache.set(sql, cached);
+			return cached;
+		}
+	}
+
 	const len = sql.length;
 
 	// Ensure the reusable buffer is large enough (output is at most len+1 chars)
@@ -228,10 +249,22 @@ export function normalizeSQL(sql) {
 		}
 	}
 
-	if (writePos === 0) return ";";
+	let result;
+	if (writePos === 0) {
+		result = ";";
+	} else {
+		while (writePos > 0 && outCodes[writePos - 1] === CC_SEMICOLON) writePos--;
+		outCodes[writePos++] = CC_SEMICOLON;
+		result = _normDecoder.decode(outCodes.subarray(0, writePos));
+	}
 
-	while (writePos > 0 && outCodes[writePos - 1] === CC_SEMICOLON) writePos--;
-	outCodes[writePos++] = CC_SEMICOLON;
+	// Populate the cache; evict the oldest entry (first Map key) when at capacity.
+	if (sql.length <= _NORM_CACHE_MAX_KEY_LEN) {
+		if (_normCache.size >= _NORM_CACHE_MAX_SIZE) {
+			_normCache.delete(_normCache.keys().next().value);
+		}
+		_normCache.set(sql, result);
+	}
 
-	return _normDecoder.decode(outCodes.subarray(0, writePos));
+	return result;
 }
