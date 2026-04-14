@@ -151,7 +151,10 @@ export function interpolateSQL(sql, params) {
 // Safe because Node.js is single-threaded and normalizeSQL is synchronous.
 let _normBuf = new Uint16Array(1024);
 // Module-level TextDecoder reuse avoids per-call object allocation.
-// 'utf-16le' correctly maps each Uint16 element to its UTF-16 code unit on LE platforms (x86/x64/ARM64).
+// 'utf-16le' maps each Uint16 element to its UTF-16 code unit.
+// Node.js runs exclusively on little-endian platforms (x86/x64/ARM64),
+// where Uint16Array values are stored in LE byte order, matching utf-16le.
+// If big-endian support is ever needed, switch to String.fromCharCode in a loop.
 const _normDecoder = new TextDecoder("utf-16le");
 
 export function normalizeSQL(sql) {
