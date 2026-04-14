@@ -30,20 +30,22 @@ export function escapeValue(value) {
 	throw new TypeError(`Unsupported parameter type: ${typeof value}`);
 }
 
-/**
- * 替换 SQL 语句中的 ? 为转义后的参数
- * @param {string} sql
- * @param {any[]} params
- * @returns {string}
- */
-export function interpolateSQL(sql, params) {
-	if (!sql.includes("?")) {
-		if (params.length > 0) throw new Error("Too many parameters provided");
-		return sql;
-	}
+// LRU cache for interpolateSQL: stores pre-parsed SQL templates so repeated calls
+// with the same template (but different params) skip the full character scan.
+// Key: SQL template string; Value: { segments: string[], paramCount: number }.
+const _INTERP_CACHE_MAX_SIZE = 256;
+const _INTERP_CACHE_MAX_KEY_LEN = 4096;
+const _interpCache = new Map();
 
-	let i = 0;
-	const parts = [];
+/**
+ * Parse an SQL template into text segments separated by `?` placeholders.
+ * Returns { segments: string[], paramCount: number } where paramCount === segments.length - 1.
+ * Throws for unterminated strings/comments (same errors as interpolateSQL).
+ * @param {string} sql
+ * @returns {{ segments: string[], paramCount: number }}
+ */
+function _parseTemplate(sql) {
+	const segments = [];
 	let segStart = 0;
 	let state = STATE_NORMAL;
 	let stateStartPos = -1;
@@ -78,9 +80,7 @@ export function interpolateSQL(sql, params) {
 			}
 
 			if (code === CC_QUESTION) {
-				if (i >= params.length) throw new Error("Too few parameters provided");
-				parts.push(sql.slice(segStart, pos));
-				parts.push(escapeValue(params[i++]));
+				segments.push(sql.slice(segStart, pos));
 				segStart = pos + 1;
 				continue;
 			}
@@ -138,9 +138,63 @@ export function interpolateSQL(sql, params) {
 		throw new Error(`Unterminated block comment starting at position ${stateStartPos + 1}`);
 	}
 
-	if (i < params.length) throw new Error("Too many parameters provided");
+	segments.push(sql.slice(segStart));
+	return { segments, paramCount: segments.length - 1 };
+}
 
-	parts.push(sql.slice(segStart));
+/**
+ * 替换 SQL 语句中的 ? 为转义后的参数
+ * @param {string} sql
+ * @param {any[]} params
+ * @returns {string}
+ */
+export function interpolateSQL(sql, params) {
+	if (!sql.includes("?")) {
+		if (params.length > 0) throw new Error("Too many parameters provided");
+		return sql;
+	}
+
+	// Look up the pre-parsed template in the LRU cache.
+	// On hit, move the entry to the end to maintain LRU order.
+	const cacheable = sql.length <= _INTERP_CACHE_MAX_KEY_LEN;
+	let template = cacheable ? _interpCache.get(sql) : undefined;
+
+	if (template !== undefined) {
+		// Only promote to the end of the Map (LRU update) when the cache has reached
+		// capacity and a subsequent insertion would trigger eviction.
+		// Using >= (not >) is intentional: when size equals the limit the cache IS full,
+		// so we must maintain correct LRU order to ensure the least-recently-used entry
+		// gets evicted on the next insertion — not a recently-accessed one.
+		// Skipping the delete+set when the cache is below capacity avoids constant Map
+		// mutation overhead on workloads that use fewer than _INTERP_CACHE_MAX_SIZE
+		// distinct templates (the common case).
+		if (_interpCache.size >= _INTERP_CACHE_MAX_SIZE) {
+			_interpCache.delete(sql);
+			_interpCache.set(sql, template);
+		}
+	} else {
+		template = _parseTemplate(sql);
+		if (cacheable) {
+			if (_interpCache.size >= _INTERP_CACHE_MAX_SIZE) {
+				_interpCache.delete(_interpCache.keys().next().value);
+			}
+			_interpCache.set(sql, template);
+		}
+	}
+
+	const { segments, paramCount } = template;
+	if (params.length < paramCount) throw new Error("Too few parameters provided");
+	if (params.length > paramCount) throw new Error("Too many parameters provided");
+
+	// Fast path: no real placeholders (all `?` were inside strings/comments).
+	if (paramCount === 0) return segments[0];
+
+	// Assemble result by interleaving template segments with escaped param values.
+	const parts = [segments[0]];
+	for (let i = 0; i < params.length; i++) {
+		parts.push(escapeValue(params[i]));
+		parts.push(segments[i + 1]);
+	}
 	return parts.join("");
 }
 
