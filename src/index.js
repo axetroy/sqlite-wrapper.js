@@ -531,7 +531,7 @@ export class SQLiteWrapper {
 		const result = current.isQuery ? this.#stdoutResult.join(EOL).trim() : "";
 		const error = this.#stderrResult.length > 0 ? this.#stderrResult.join(EOL).trim() : "";
 
-		// 复用已分配的数组，避免高频查询下反复 allocate/GC
+		// Reuse the existing arrays to avoid repeated allocate/GC pressure under high-frequency queries.
 		this.#stdoutResult.length = 0;
 		this.#stderrResult.length = 0;
 		if (current.isQuery) this.#queryInFlight--;

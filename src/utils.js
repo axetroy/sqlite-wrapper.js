@@ -154,15 +154,19 @@ let _normBuf = new Uint16Array(1024);
 // If big-endian support is ever needed, switch to String.fromCharCode in a loop.
 const _normDecoder = new TextDecoder("utf-16le");
 
-// LRU 缓存：对高频重复 SQL（如 BEGIN/COMMIT/ROLLBACK 或固定模板查询）跳过重复扫描。
-// 使用 Map 的插入顺序实现简单的 LRU：命中时将条目移至末尾，超限时淘汰最老条目（首项）。
-// 只缓存长度不超过 _NORM_CACHE_MAX_KEY_LEN 的 SQL，避免大字符串占用过多内存。
+// LRU cache for normalizeSQL: skips repeated full-string scans for high-frequency SQL
+// such as BEGIN/COMMIT/ROLLBACK or fixed-template queries.
+// Map insertion order provides simple LRU semantics: on hit, move the entry to the end;
+// when the cache is full, evict the oldest entry (first key in the Map).
+// Only SQL strings up to _NORM_CACHE_MAX_KEY_LEN characters are cached to avoid
+// retaining large strings in memory.
 const _NORM_CACHE_MAX_SIZE = 256;
 const _NORM_CACHE_MAX_KEY_LEN = 4096;
 const _normCache = new Map();
 
 export function normalizeSQL(sql) {
-	// 对短 SQL 先查缓存，命中则直接返回，命中项移至末尾以维持 LRU 语义
+	// Check the cache before scanning for short SQL strings.
+	// On hit, promote the entry to the end to maintain LRU order.
 	if (sql.length <= _NORM_CACHE_MAX_KEY_LEN) {
 		const cached = _normCache.get(sql);
 		if (cached !== undefined) {
@@ -254,7 +258,7 @@ export function normalizeSQL(sql) {
 		result = _normDecoder.decode(outCodes.subarray(0, writePos));
 	}
 
-	// 将结果写入缓存；超过上限时淘汰最老条目（Map 首项）
+	// Populate the cache; evict the oldest entry (first Map key) when at capacity.
 	if (sql.length <= _NORM_CACHE_MAX_KEY_LEN) {
 		if (_normCache.size >= _NORM_CACHE_MAX_SIZE) {
 			_normCache.delete(_normCache.keys().next().value);
