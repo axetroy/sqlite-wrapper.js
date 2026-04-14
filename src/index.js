@@ -494,12 +494,7 @@ export class SQLiteWrapper {
 		if (this.#isFinalizeScheduled) return;
 		this.#isFinalizeScheduled = true;
 
-		// queueMicrotask runs before any I/O event, giving the next query a head-start
-		// over setImmediate (which runs after the I/O polling phase).  This is safe
-		// because sqlite3 emits the END marker only after all result rows for the
-		// current query have been flushed; no further stdout data for this query can
-		// arrive after we schedule here.
-		queueMicrotask(() => {
+		setImmediate(() => {
 			this.#isFinalizeScheduled = false;
 			this.#finalizeCurrent();
 		});

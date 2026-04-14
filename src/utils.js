@@ -160,8 +160,14 @@ export function interpolateSQL(sql, params) {
 	let template = cacheable ? _interpCache.get(sql) : undefined;
 
 	if (template !== undefined) {
-		_interpCache.delete(sql);
-		_interpCache.set(sql, template);
+		// Only promote to the end of the Map (LRU update) when the cache has reached
+		// capacity and eviction could occur.  Skipping the delete+set when the cache
+		// is smaller than its limit avoids constant Map mutation overhead on every
+		// cache hit for workloads that use fewer than _INTERP_CACHE_MAX_SIZE templates.
+		if (_interpCache.size >= _INTERP_CACHE_MAX_SIZE) {
+			_interpCache.delete(sql);
+			_interpCache.set(sql, template);
+		}
 	} else {
 		template = _parseTemplate(sql);
 		if (cacheable) {
