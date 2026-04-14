@@ -74,15 +74,23 @@ export interface RunResult {
 export type TransactionType = "DEFERRED" | "IMMEDIATE" | "EXCLUSIVE";
 
 /**
- * A restricted database handle passed to the `transaction()` callback.
- * Exposes `exec`, `run`, and `query` for use within the transaction body.
- * Does not expose `transaction()` to prevent nesting.
+ * A restricted database handle passed to the `exclusive()` callback.
+ * Only SQL issued through this handle will execute during the exclusive zone;
+ * all other SQL is queued until the zone ends.
+ * Exposes `exec`, `run`, and `query`. Does not expose `exclusive()` or
+ * `transaction()` to prevent nesting.
  */
-export interface Transaction {
+export interface ExclusiveZone {
 	exec(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<void>;
 	run(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<RunResult>;
 	query<T = any>(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<T[]>;
 }
+
+/**
+ * A restricted database handle passed to the `transaction()` callback.
+ * Alias for `ExclusiveZone`.
+ */
+export type Transaction = ExclusiveZone;
 
 export declare class SQLiteWrapper implements Disposable {
 	/**
@@ -137,15 +145,40 @@ export declare class SQLiteWrapper implements Disposable {
 	query<T = any>(sql: string, params?: any[], options?: SQLiteOperationOptions): Promise<T[]>;
 
 	/**
+	 * Runs `fn` inside an exclusive zone.
+	 *
+	 * While the zone is active, only SQL issued through the provided `zone`
+	 * handle is allowed to execute. Any other SQL (bare `exec`, `run`, `query`,
+	 * or SQL from another `exclusive`/`transaction` call) is automatically
+	 * queued and will execute after the zone ends.
+	 *
+	 * Concurrent calls are automatically serialized — they never interleave.
+	 *
+	 * The callback receives a restricted `zone` handle that exposes `exec`,
+	 * `run`, and `query`. Do **not** call `db.exclusive()` or `db.transaction()`
+	 * recursively inside the callback; doing so will deadlock.
+	 *
+	 * `transaction()` is built on top of `exclusive()` and wraps the zone body
+	 * with `BEGIN … COMMIT / ROLLBACK`.
+	 *
+	 * @param fn Async callback that performs database work using `zone`
+	 * @returns The value returned by `fn`
+	 */
+	exclusive<T = void>(fn: (zone: ExclusiveZone) => Promise<T>): Promise<T>;
+
+	/**
 	 * Runs `fn` inside a serialized transaction.
+	 *
+	 * Internally calls `exclusive()` and wraps the zone body with
+	 * `BEGIN … COMMIT / ROLLBACK`.
 	 *
 	 * Concurrent calls are automatically queued and executed one at a time,
 	 * so it is safe to call `transaction()` from multiple concurrent async
 	 * contexts — they will never interleave.
 	 *
 	 * The callback receives a restricted `tx` handle that exposes `exec`,
-	 * `run`, and `query`. Do **not** call `db.transaction()` recursively
-	 * inside the callback; doing so will deadlock.
+	 * `run`, and `query`. Do **not** call `db.exclusive()` or `db.transaction()`
+	 * recursively inside the callback; doing so will deadlock.
 	 *
 	 * @param fn Async callback that performs database work using `tx`
 	 * @param type SQLite transaction isolation type (default: `"DEFERRED"`)

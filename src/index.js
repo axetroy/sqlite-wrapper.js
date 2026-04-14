@@ -32,12 +32,12 @@ export class SQLiteWrapper {
 	queue = new Queue();
 	#inflight = [];
 	#closed = false;
-	#transactionChain = Promise.resolve();
-	// Symbol of the transaction currently active between BEGIN and COMMIT/ROLLBACK.
-	// Null when no transaction is in progress.
-	#activeTransactionId = null;
-	// Tasks that arrived while a transaction was active and do not belong to it.
-	// Re-enqueued (with priority) once the transaction ends.
+	#exclusiveChain = Promise.resolve();
+	// Symbol of the exclusive zone currently holding the lock.
+	// Null when no zone is active.
+	#activeZoneId = null;
+	// Tasks that arrived while an exclusive zone was active and do not belong to it.
+	// Re-enqueued (with priority) once the zone ends.
 	#deferredQueue = new Queue();
 	#stdoutResult = "";
 	#stdoutChunkRemainder = "";
@@ -151,61 +151,67 @@ export class SQLiteWrapper {
 		}
 	}
 
-	async transaction(fn, type = "DEFERRED") {
-		if (!VALID_TRANSACTION_TYPES.includes(type)) {
-			throw new TypeError(`transaction type must be one of: ${VALID_TRANSACTION_TYPES.join(", ")}`);
-		}
-
-		const txId = Symbol();
+	async exclusive(fn) {
+		const zoneId = Symbol();
 
 		let releaseGate;
 		const gate = new Promise((resolve) => {
 			releaseGate = resolve;
 		});
 
-		const previous = this.#transactionChain;
-		this.#transactionChain = gate;
+		const previous = this.#exclusiveChain;
+		this.#exclusiveChain = gate;
 
 		try {
 			await previous;
 		} catch {
-			// The previous transaction's error has already been delivered to its own caller.
-			// We only need the gate to resolve so this transaction can proceed.
+			// The previous zone's error has already been delivered to its own caller.
+			// We only need the gate to resolve so this zone can proceed.
 		}
 
-		// Claim the active slot synchronously (no await between here and BEGIN).
+		// Claim the active slot synchronously (no await between here and fn).
 		// Any bare exec/run/query calls enqueued from this point on will be deferred
-		// until after COMMIT / ROLLBACK.
-		this.#activeTransactionId = txId;
+		// until after the zone ends.
+		this.#activeZoneId = zoneId;
 
-		const tx = {
+		const zone = {
 			exec: (sql, params = [], options = {}) =>
-				this.#enqueueSQL(sql, params, { isQuery: false, signal: options?.signal, txId }),
-			run: (sql, params = [], options = {}) => this.#runWithTxId(sql, params, options, txId),
-			query: (sql, params = [], options = {}) => this.#queryWithTxId(sql, params, options, txId),
+				this.#enqueueSQL(sql, params, { isQuery: false, signal: options?.signal, txId: zoneId }),
+			run: (sql, params = [], options = {}) => this.#runWithTxId(sql, params, options, zoneId),
+			query: (sql, params = [], options = {}) => this.#queryWithTxId(sql, params, options, zoneId),
 		};
 
 		try {
-			await this.#enqueueSQL(`BEGIN ${type}`, [], { isQuery: false, txId });
+			return await fn(zone);
+		} finally {
+			// Release the active slot before unblocking the next zone so that
+			// deferred tasks are restored while no zone holds the lock.
+			this.#activeZoneId = null;
+			this.#restoreDeferred();
+			releaseGate();
+		}
+	}
+
+	async transaction(fn, type = "DEFERRED") {
+		if (!VALID_TRANSACTION_TYPES.includes(type)) {
+			throw new TypeError(`transaction type must be one of: ${VALID_TRANSACTION_TYPES.join(", ")}`);
+		}
+
+		return this.exclusive(async (zone) => {
+			await zone.exec(`BEGIN ${type}`);
 			try {
-				const result = await fn(tx);
-				await this.#enqueueSQL("COMMIT", [], { isQuery: false, txId });
+				const result = await fn(zone);
+				await zone.exec("COMMIT");
 				return result;
 			} catch (error) {
 				// ROLLBACK errors (e.g. "no transaction is active") are intentionally
 				// swallowed here: if BEGIN itself succeeded but fn threw, we always
 				// attempt a ROLLBACK as best-effort cleanup, but we surface the
 				// original error to the caller regardless of whether it succeeds.
-				await this.#enqueueSQL("ROLLBACK", [], { isQuery: false, txId }).catch(() => {});
+				await zone.exec("ROLLBACK").catch(() => {});
 				throw error;
 			}
-		} finally {
-			// Release the active slot before unblocking the next transaction so that
-			// deferred tasks are restored while no transaction holds the lock.
-			this.#activeTransactionId = null;
-			this.#restoreDeferred();
-			releaseGate();
-		}
+		});
 	}
 
 	close() {
@@ -301,7 +307,7 @@ export class SQLiteWrapper {
 		const maxInFlight = this.#maxInFlight;
 		const maxBatchChars = this.#maxBatchChars;
 		const debug = this.#logger?.debug;
-		const activeId = this.#activeTransactionId;
+		const activeId = this.#activeZoneId;
 
 		const payloadParts = [];
 		let payloadChars = 0;
@@ -311,7 +317,7 @@ export class SQLiteWrapper {
 			const nextTask = queue.peek();
 			if (!nextTask) break;
 
-			// When a transaction is active, defer any task that does not belong to it.
+			// When an exclusive zone is active, defer any task that does not belong to it.
 			// Tasks that were previously deferred and re-enqueued (restoredFromDeferred)
 			// bypass this check and are never deferred a second time.
 			if (activeId !== null && nextTask.txId !== activeId && !nextTask.restoredFromDeferred) {
@@ -541,7 +547,7 @@ export class SQLiteWrapper {
 			task.reject(error);
 		}
 
-		this.#activeTransactionId = null;
+		this.#activeZoneId = null;
 		this.#stdoutResult = "";
 		this.#stdoutChunkRemainder = "";
 		this.#stderrResult = "";

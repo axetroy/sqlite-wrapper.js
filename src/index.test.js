@@ -380,6 +380,153 @@ describe("SQLiteWrapper", () => {
 	});
 });
 
+describe("exclusive()", () => {
+	test("成功执行并返回回调的返回值", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS ex_basic (val TEXT)");
+
+		const result = await sqlite.exclusive(async (zone) => {
+			await zone.exec("INSERT INTO ex_basic (val) VALUES ('hello')");
+			return 99;
+		});
+
+		assert.equal(result, 99);
+		const rows = await sqlite.query("SELECT val FROM ex_basic");
+		assert.deepEqual(rows, [{ val: "hello" }]);
+	});
+
+	test("zone 对象暴露 exec、run 和 query 方法", async () => {
+		await sqlite.exclusive(async (zone) => {
+			assert.equal(typeof zone.exec, "function");
+			assert.equal(typeof zone.run, "function");
+			assert.equal(typeof zone.query, "function");
+			assert.equal(typeof zone.exclusive, "undefined");
+			assert.equal(typeof zone.transaction, "undefined");
+		});
+	});
+
+	test("zone 内只有区内 SQL 被执行，外部 SQL 被延迟至 zone 结束后", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS ex_defer (val TEXT)");
+
+		const log = [];
+
+		let resolveBarrier;
+		const barrier = new Promise((r) => {
+			resolveBarrier = r;
+		});
+
+		const zonePromise = sqlite.exclusive(async (zone) => {
+			await zone.exec("INSERT INTO ex_defer (val) VALUES ('zone-a')");
+			resolveBarrier();
+			await new Promise((r) => setImmediate(r));
+			await zone.exec("INSERT INTO ex_defer (val) VALUES ('zone-b')");
+			log.push("zone-end");
+		});
+
+		await barrier;
+
+		let zoneFinished = false;
+		const outsidePromise = sqlite.exec("INSERT INTO ex_defer (val) VALUES ('outside')").then(() => {
+			assert.ok(zoneFinished, "外部 exec 必须在 exclusive zone 结束后才能执行");
+			log.push("outside-end");
+		});
+
+		await zonePromise;
+		zoneFinished = true;
+		await outsidePromise;
+
+		assert.ok(log.indexOf("zone-end") < log.indexOf("outside-end"));
+
+		const rows = await sqlite.query("SELECT val FROM ex_defer ORDER BY rowid");
+		assert.deepEqual(rows.map((r) => r.val), ["zone-a", "zone-b", "outside"]);
+	});
+
+	test("并发 exclusive zone 依次串行执行，不会交错", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS ex_serial (val TEXT)");
+
+		const log = [];
+
+		const z1 = sqlite.exclusive(async (zone) => {
+			log.push("z1-start");
+			await zone.exec("INSERT INTO ex_serial (val) VALUES ('z1-a')");
+			await new Promise((r) => setImmediate(r));
+			await zone.exec("INSERT INTO ex_serial (val) VALUES ('z1-b')");
+			log.push("z1-end");
+		});
+
+		const z2 = sqlite.exclusive(async (zone) => {
+			log.push("z2-start");
+			await zone.exec("INSERT INTO ex_serial (val) VALUES ('z2')");
+			log.push("z2-end");
+		});
+
+		await Promise.all([z1, z2]);
+
+		assert.deepEqual(log, ["z1-start", "z1-end", "z2-start", "z2-end"]);
+
+		const rows = await sqlite.query("SELECT val FROM ex_serial ORDER BY rowid");
+		assert.deepEqual(rows.map((r) => r.val), ["z1-a", "z1-b", "z2"]);
+	});
+
+	test("zone 内抛出错误时正确释放锁，后续 zone 仍可执行", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS ex_error (val TEXT)");
+
+		await assert.rejects(
+			sqlite.exclusive(async (zone) => {
+				await zone.exec("INSERT INTO ex_error (val) VALUES ('before-throw')");
+				throw new Error("zone error");
+			}),
+			/zone error/,
+		);
+
+		// 锁已释放，后续 exclusive 仍可正常执行
+		await sqlite.exclusive(async (zone) => {
+			await zone.exec("INSERT INTO ex_error (val) VALUES ('after-throw')");
+		});
+
+		const rows = await sqlite.query("SELECT val FROM ex_error ORDER BY rowid");
+		assert.deepEqual(rows.map((r) => r.val), ["before-throw", "after-throw"]);
+	});
+
+	test("多个 exclusive zone 与裸 SQL 依次按入队顺序执行", async () => {
+		await sqlite.exec("CREATE TABLE IF NOT EXISTS ex_order (val TEXT)");
+
+		const log = [];
+
+		let resolveBarrier;
+		const barrier = new Promise((r) => {
+			resolveBarrier = r;
+		});
+
+		// Z1 持有锁后发出信号，让 Z2 和裸 exec 在锁定期间入队
+		const z1 = sqlite.exclusive(async (zone) => {
+			await zone.exec("INSERT INTO ex_order (val) VALUES ('z1')");
+			resolveBarrier();
+			await new Promise((r) => setImmediate(r));
+			log.push("z1-end");
+		});
+
+		await barrier;
+
+		const bare = sqlite.exec("INSERT INTO ex_order (val) VALUES ('bare')").then(() => {
+			log.push("bare-end");
+		});
+
+		const z2 = sqlite.exclusive(async (zone) => {
+			await zone.exec("INSERT INTO ex_order (val) VALUES ('z2')");
+			log.push("z2-end");
+		});
+
+		await Promise.all([z1, bare, z2]);
+
+		// bare 在 z1 释放锁后、z2 之前执行（deferred 任务先于下一个 zone）
+		assert.ok(log.indexOf("z1-end") < log.indexOf("bare-end"), "bare 必须在 z1 之后执行");
+		assert.ok(log.indexOf("bare-end") < log.indexOf("z2-end"), "bare 必须在 z2 之前执行");
+
+		const rows = await sqlite.query("SELECT val FROM ex_order ORDER BY rowid");
+		assert.deepEqual(rows.map((r) => r.val), ["z1", "bare", "z2"]);
+	});
+});
+
 describe("transaction()", () => {
 	test("成功提交并返回函数返回值", async () => {
 		await sqlite.exec("CREATE TABLE IF NOT EXISTS tx_commit (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
