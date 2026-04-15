@@ -122,8 +122,9 @@ async function benchmarkWorkload(name, operationCount, fn) {
 /**
  * Format and display benchmark results
  * @param {Array} results - Array of benchmark results
+ * @param {string} [title] - Optional title override
  */
-function displayResults(results) {
+function displayResults(results, title = "SQLite Wrapper Benchmark Results") {
 	const terminalWidth = Number(process.stdout.columns) || 120;
 	const separators = 5; // one space between each adjacent column
 	const minNameWidth = 20;
@@ -175,7 +176,7 @@ function displayResults(results) {
 	};
 
 	console.log("\n" + "=".repeat(tableWidth));
-	console.log("SQLite Wrapper Benchmark Results");
+	console.log(title);
 	console.log("=".repeat(tableWidth));
 	console.log(
 		[
@@ -205,12 +206,69 @@ function displayResults(results) {
 	console.log("=".repeat(tableWidth) + "\n");
 }
 
+/**
+ * 并排显示单进程模式与读写分离模式的对比结果
+ * @param {Array<{label: string, concurrency: number, single: object, pool: object, poolSize: number}>} pairs
+ */
+function displayComparisonResults(pairs) {
+	const terminalWidth = Number(process.stdout.columns) || 140;
+
+	// 列宽定义
+	const labelWidth = 36;
+	const numWidth = 14;
+	const speedupWidth = 10;
+	// 6 列之间 5 个空格分隔
+	const tableWidth = Math.min(terminalWidth, labelWidth + numWidth * 4 + speedupWidth + 5);
+
+	const padL = (s, w) => {
+		const str = String(s);
+		return str.length >= w ? str.slice(0, w) : str.padEnd(w);
+	};
+	const padR = (s, w) => {
+		const str = String(s);
+		return str.length >= w ? str.slice(0, w) : str.padStart(w);
+	};
+
+	console.log("\n" + "=".repeat(tableWidth));
+	console.log("读写分离（readPoolSize）对比结果");
+	console.log("=".repeat(tableWidth));
+	console.log(
+		[
+			padL("测试场景", labelWidth),
+			padR("单进程 Avg(ms)", numWidth),
+			padR("Pool Avg(ms)", numWidth),
+			padR("单进程 Ops/s", numWidth),
+			padR("Pool Ops/s", numWidth),
+			padR("提升", speedupWidth),
+		].join(" "),
+	);
+	console.log("-".repeat(tableWidth));
+
+	for (const { label, single, pool } of pairs) {
+		const speedup = (parseFloat(pool.opsPerSecond) / parseFloat(single.opsPerSecond)).toFixed(2);
+		console.log(
+			[
+				padL(label, labelWidth),
+				padR(single.avgTime, numWidth),
+				padR(pool.avgTime, numWidth),
+				padR(single.opsPerSecond, numWidth),
+				padR(pool.opsPerSecond, numWidth),
+				padR(`${speedup}x`, speedupWidth),
+			].join(" "),
+		);
+	}
+
+	console.log("=".repeat(tableWidth));
+	console.log("注：Ops/s = 每秒完成的批次数（每批含多个并发查询）；提升 = Pool Ops/s ÷ 单进程 Ops/s\n");
+}
+
 async function main() {
 	// Get SQLite3 path (downloaded or system)
 	const sqlite3Path = await getSqlite3Path();
 	console.log(`Using SQLite3 at: ${sqlite3Path}\n`);
 
 	const results = [];
+	const comparisonPairs = [];
 
 	console.log("Starting benchmarks...\n");
 
@@ -733,8 +791,197 @@ async function main() {
 		sqlite.close();
 	}
 
+	// ============================================================
+	// 读写分离（readPoolSize）对比基准（18-20）
+	// 相同负载分别用单进程模式与 readPoolSize=4 运行，量化读进程池带来的吞吐提升。
+	// ============================================================
+
+	const readPoolDbPath = path.join(__dirname, "benchmark-readpool.db");
+	const READ_POOL_TABLE_ROWS = 100000;
+	const CONCURRENT_QUERY_COUNT = 20;
+	const READS_PER_WRITE = 5;
+	const POOL_SIZE = 4;
+	const CONCURRENT_BENCH_ITERS = 100;
+	const RW_BENCH_ITERS = 500;
+
+	// 清理可能残留的文件
+	for (const ext of ["", "-wal", "-shm"]) {
+		const p = readPoolDbPath + ext;
+		if (fs.existsSync(p)) fs.unlinkSync(p);
+	}
+
+	// 初始化共享只读数据表
+	{
+		console.log(`Preparing read-pool comparison table (${READ_POOL_TABLE_ROWS} rows)...`);
+		const setupDb = new SQLiteWrapper(sqlite3Path, { dbPath: readPoolDbPath });
+		await setupDb.exec(`
+			CREATE TABLE read_pool_bench (
+				id INTEGER PRIMARY KEY,
+				name TEXT NOT NULL,
+				category INTEGER NOT NULL,
+				score INTEGER NOT NULL
+			)
+		`);
+		await setupDb.exec(`
+			WITH RECURSIVE seq(n) AS (
+				SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ${READ_POOL_TABLE_ROWS}
+			)
+			INSERT INTO read_pool_bench SELECT n, 'User ' || n, n % 100, (n * 13) % 1000 FROM seq
+		`);
+		await setupDb.exec("CREATE INDEX idx_rpb_category ON read_pool_bench(category)");
+		await setupDb.exec("CREATE INDEX idx_rpb_score ON read_pool_bench(score)");
+		setupDb.close();
+	}
+
+	// 基准 18: 并发点查询（单进程 vs 读写分离）
+	// 每次迭代同时发出 CONCURRENT_QUERY_COUNT 个点查询（Promise.all）
+	{
+		let qid = 0;
+		const single = new SQLiteWrapper(sqlite3Path, { dbPath: readPoolDbPath });
+		const singleResult = await benchmark(
+			`并发点查询 (${CONCURRENT_QUERY_COUNT}路) - 单进程`,
+			async () => {
+				await Promise.all(
+					Array.from({ length: CONCURRENT_QUERY_COUNT }, () =>
+						single.query("SELECT id, name, score FROM read_pool_bench WHERE id = ?", [(qid++ % READ_POOL_TABLE_ROWS) + 1]),
+					),
+				);
+			},
+			CONCURRENT_BENCH_ITERS,
+		);
+		single.close();
+
+		qid = 0;
+		const pool = new SQLiteWrapper(sqlite3Path, { dbPath: readPoolDbPath, readPoolSize: POOL_SIZE });
+		await pool.exec("SELECT 1"); // 等待 WAL 初始化完成
+		const poolResult = await benchmark(
+			`并发点查询 (${CONCURRENT_QUERY_COUNT}路) - 读写分离(pool=${POOL_SIZE})`,
+			async () => {
+				await Promise.all(
+					Array.from({ length: CONCURRENT_QUERY_COUNT }, () =>
+						pool.query("SELECT id, name, score FROM read_pool_bench WHERE id = ?", [(qid++ % READ_POOL_TABLE_ROWS) + 1]),
+					),
+				);
+			},
+			CONCURRENT_BENCH_ITERS,
+		);
+		pool.close();
+
+		results.push(singleResult);
+		results.push(poolResult);
+		comparisonPairs.push({
+			label: `并发点查询 (${CONCURRENT_QUERY_COUNT}路并发)`,
+			concurrency: CONCURRENT_QUERY_COUNT,
+			single: singleResult,
+			pool: poolResult,
+		});
+	}
+
+	// 基准 19: 并发范围查询（单进程 vs 读写分离）
+	// 每次迭代同时发出 CONCURRENT_QUERY_COUNT 个范围查询（Promise.all）
+	{
+		let cat = 0;
+		const single = new SQLiteWrapper(sqlite3Path, { dbPath: readPoolDbPath });
+		const singleResult = await benchmark(
+			`并发范围查询 (${CONCURRENT_QUERY_COUNT}路) - 单进程`,
+			async () => {
+				await Promise.all(
+					Array.from({ length: CONCURRENT_QUERY_COUNT }, (_, i) =>
+						single.query("SELECT id, score FROM read_pool_bench WHERE category = ? ORDER BY id LIMIT 50", [(cat + i) % 100]),
+					),
+				);
+				cat = (cat + CONCURRENT_QUERY_COUNT) % 100;
+			},
+			CONCURRENT_BENCH_ITERS,
+		);
+		single.close();
+
+		cat = 0;
+		const pool = new SQLiteWrapper(sqlite3Path, { dbPath: readPoolDbPath, readPoolSize: POOL_SIZE });
+		await pool.exec("SELECT 1");
+		const poolResult = await benchmark(
+			`并发范围查询 (${CONCURRENT_QUERY_COUNT}路) - 读写分离(pool=${POOL_SIZE})`,
+			async () => {
+				await Promise.all(
+					Array.from({ length: CONCURRENT_QUERY_COUNT }, (_, i) =>
+						pool.query("SELECT id, score FROM read_pool_bench WHERE category = ? ORDER BY id LIMIT 50", [(cat + i) % 100]),
+					),
+				);
+				cat = (cat + CONCURRENT_QUERY_COUNT) % 100;
+			},
+			CONCURRENT_BENCH_ITERS,
+		);
+		pool.close();
+
+		results.push(singleResult);
+		results.push(poolResult);
+		comparisonPairs.push({
+			label: `并发范围查询 (${CONCURRENT_QUERY_COUNT}路并发)`,
+			concurrency: CONCURRENT_QUERY_COUNT,
+			single: singleResult,
+			pool: poolResult,
+		});
+	}
+
+	// 基准 20: 读写并发（1次写入 + READS_PER_WRITE 个并发读取，单进程 vs 读写分离）
+	// 每次迭代：1 个 exec() INSERT 与 READS_PER_WRITE 个 query() SELECT 并发执行
+	{
+		const single = new SQLiteWrapper(sqlite3Path, { dbPath: readPoolDbPath });
+		await single.exec("CREATE TABLE IF NOT EXISTS rw_bench_single (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+		let wid = 0;
+		const singleResult = await benchmark(
+			`读写并发 (1写+${READS_PER_WRITE}读) - 单进程`,
+			async () => {
+				const readId = (wid % READ_POOL_TABLE_ROWS) + 1;
+				await Promise.all([
+					single.exec("INSERT INTO rw_bench_single (val) VALUES (?)", [`v${wid++}`]),
+					...Array.from({ length: READS_PER_WRITE }, () =>
+						single.query("SELECT id, name, score FROM read_pool_bench WHERE id = ?", [readId]),
+					),
+				]);
+			},
+			RW_BENCH_ITERS,
+		);
+		single.close();
+
+		const pool = new SQLiteWrapper(sqlite3Path, { dbPath: readPoolDbPath, readPoolSize: POOL_SIZE });
+		await pool.exec("SELECT 1");
+		await pool.exec("CREATE TABLE IF NOT EXISTS rw_bench_pool (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+		wid = 0;
+		const poolResult = await benchmark(
+			`读写并发 (1写+${READS_PER_WRITE}读) - 读写分离(pool=${POOL_SIZE})`,
+			async () => {
+				const readId = (wid % READ_POOL_TABLE_ROWS) + 1;
+				await Promise.all([
+					pool.exec("INSERT INTO rw_bench_pool (val) VALUES (?)", [`v${wid++}`]),
+					...Array.from({ length: READS_PER_WRITE }, () =>
+						pool.query("SELECT id, name, score FROM read_pool_bench WHERE id = ?", [readId]),
+					),
+				]);
+			},
+			RW_BENCH_ITERS,
+		);
+		pool.close();
+
+		results.push(singleResult);
+		results.push(poolResult);
+		comparisonPairs.push({
+			label: `读写并发 (1写+${READS_PER_WRITE}读)`,
+			concurrency: READS_PER_WRITE + 1,
+			single: singleResult,
+			pool: poolResult,
+		});
+	}
+
+	// 清理读写分离对比测试数据库
+	for (const ext of ["", "-wal", "-shm"]) {
+		const p = readPoolDbPath + ext;
+		if (fs.existsSync(p)) fs.unlinkSync(p);
+	}
+
 	// Display results
 	displayResults(results);
+	displayComparisonResults(comparisonPairs);
 
 	// Clean up
 	if (fs.existsSync(dbPath)) {

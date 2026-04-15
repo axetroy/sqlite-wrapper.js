@@ -56,6 +56,19 @@ The SQLite benchmark suite tests the following operations:
 16. **20k Chunked Enqueue INSERT** - End-to-end time to enqueue 20000 INSERT statements in chunks (1000 per chunk) with `Promise.all`
 17. **20k Burst Enqueue UPDATE** - End-to-end time to enqueue 20000 UPDATE statements at once with `Promise.all`, then wait for full queue digestion
 
+### 读写分离（readPoolSize）对比测试
+
+这三组基准在相同负载下分别以 **单进程模式**（无 `readPoolSize`）和 **读写分离模式**（`readPoolSize=4`）运行，直接量化读进程池带来的吞吐提升。每次迭代均以 `Promise.all` 同时发起多个查询，充分体现并发收益。
+
+18. **并发点查询 (20路) - 单进程** - 每轮同时发出 20 个按主键的点查询，单进程串行处理
+19. **并发点查询 (20路) - 读写分离(pool=4)** - 同上，但 20 个查询分发到 4 个只读进程并行处理
+20. **并发范围查询 (20路) - 单进程** - 每轮同时发出 20 个按 category 索引的范围查询，单进程串行处理
+21. **并发范围查询 (20路) - 读写分离(pool=4)** - 同上，由 4 个只读进程并行处理
+22. **读写并发 (1写+5读) - 单进程** - 每轮 1 个 INSERT 与 5 个 SELECT 在单进程中串行排队
+23. **读写并发 (1写+5读) - 读写分离(pool=4)** - 同上，INSERT 走写进程，5 个 SELECT 分发至读进程池，读写互不阻塞
+
+运行结束后，基准程序会在主结果表之后额外输出一张 **并排对比表**，列出每个场景的 `Avg(ms)`、`Ops/s` 及相对于单进程的 **提升倍数**。
+
 The standalone queue benchmark covers these in-memory workloads:
 
 1. **Queue Enqueue Only** - Measuring raw enqueue throughput
