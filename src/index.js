@@ -679,6 +679,7 @@ export class SQLiteWrapper {
 			isQuery: task.isQuery,
 			status,
 			queueMs,
+			queueSize: this.queue.size,
 			runMs,
 			totalMs,
 		});

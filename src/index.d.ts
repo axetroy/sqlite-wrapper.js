@@ -1,3 +1,4 @@
+/// <reference lib="esnext" />
 import { Queue } from "./queue.js";
 
 /**
@@ -42,6 +43,7 @@ export interface SQLiteWrapperTiming {
 	isQuery: boolean;
 	status: "fulfilled" | "rejected";
 	queueMs: number;
+	queueSize: number;
 	runMs: number;
 	totalMs: number;
 }
@@ -96,7 +98,7 @@ export declare class SQLiteWrapper implements Disposable {
 	/**
 	 * Queue for pending SQL queries
 	 */
-	queue: Queue
+	queue: Queue;
 
 	/**
 	 *
@@ -114,7 +116,6 @@ export declare class SQLiteWrapper implements Disposable {
 	 * Get pending SQL queries in the queue.
 	 */
 	get pendingQueries(): number;
-
 
 	/**
 	 * Executes a SQL query.
