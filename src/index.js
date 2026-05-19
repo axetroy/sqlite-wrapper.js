@@ -77,7 +77,7 @@ export class SQLiteWrapper {
 
 		if (dbPath) args.push(dbPath);
 
-		this.#proc = spawn(sqlite3ExePath, args, { stdio: "pipe" });
+		this.#proc = spawn(sqlite3ExePath, args, { stdio: "pipe", shell: false, windowsHide: true });
 		this.#proc.stdin.setDefaultEncoding("utf-8");
 		this.#proc.stdout.setEncoding("utf-8");
 		this.#proc.stderr.setEncoding("utf-8");
