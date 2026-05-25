@@ -622,15 +622,7 @@ Node.js 内存暴涨
 
 ## 12.2 流式读取
 
-提供两种 API：
-
-**1. 回调模式：**
-
-```js id="k3m8t1"
-await db.queryStream(sql, (row) => { ... });
-```
-
-**2. Async Iterator 模式（推荐）：**
+提供 Async Iterator 模式：
 
 ```js id="v6k1x9"
 for await (const row of db.stream(sql)) {
@@ -647,7 +639,7 @@ stdout chunk
 createRowStreamParser
    │ 逐元素
    ▼
-onRow(row)  /  AsyncRowBuffer → for await
+onRow(row) → AsyncRowBuffer → for await
 ```
 
 而不是：
@@ -906,7 +898,7 @@ const rows = await db.query(`
 ## 18.4 stream query
 
 ```js id="x1p7k5"
-await db.queryStream(sql, (row) => {
+await db.stream(sql, (row) => {
 	console.log(row);
 });
 ```

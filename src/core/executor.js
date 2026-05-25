@@ -18,7 +18,7 @@ import { Metrics } from "./metrics.js";
 /**
  * SQLite 执行器。
  *
- * 通过 stdin/stdout 与 sqlite3 CLI 进程通信，提供 execute/query/queryStream/transaction API。
+ * 通过 stdin/stdout 与 sqlite3 CLI 进程通信，提供 execute/query/stream/transaction API。
  * 内部使用串行队列保证任务按顺序执行，基于 Sentinel token 协议检测单个 SQL 任务的输出边界。
  */
 export class SQLiteExecutor {
@@ -115,30 +115,7 @@ export class SQLiteExecutor {
 	}
 
 	/**
-	 * 流式执行查询，每返回一行就调用 onRow 回调。
-	 * 不会将所有结果一次性缓存在内存中。
-	 * @template T
-	 * @param {string} sql
-	 * @param {(row: T) => void} onRow
-	 * @param {any[]} [params]
-	 * @param {{ timeout?: number }} [options]
-	 * @returns {Promise<void>}
-	 */
-	queryStream(sql, onRow, params = [], options = {}) {
-		if (typeof onRow !== "function") {
-			return Promise.reject(new TypeError("queryStream requires an onRow callback"));
-		}
-		return this.#enqueue("stream", sql, params, { ...options, onRow }, null);
-	}
-
-	/**
-	 * 流式执行查询，返回 AsyncIterable。
-	 *
-	 * 与 queryStream 的 onRow 回调模式不同，stream() 返回实现了
-	 * AsyncIterable 协议的对象，可直接用于 for await 循环。
-	 *
-	 * 内部复用相同的 stream 任务队列机制，通过 AsyncRowBuffer
-	 * 将回调驱动的行流桥接到 async iterator 协议。
+	 * 流式执行查询，返回 AsyncIterable，可配合 `for await` 逐行消费。
 	 *
 	 * @template T
 	 * @param {string} sql
@@ -191,8 +168,6 @@ export class SQLiteExecutor {
 		const tx = {
 			execute: (sql, params = [], txOptions = {}) => this.#enqueue("execute", sql, params, txOptions, scopeId),
 			query: (sql, params = [], txOptions = {}) => this.#enqueue("query", sql, params, txOptions, scopeId),
-			queryStream: (sql, onRow, params = [], txOptions = {}) =>
-				this.#enqueue("stream", sql, params, { ...txOptions, onRow }, scopeId),
 			stream: (sql, params = [], txOptions = {}) => {
 				if (!Array.isArray(params)) throw new TypeError("params must be an array");
 				const buffer = new AsyncRowBuffer();

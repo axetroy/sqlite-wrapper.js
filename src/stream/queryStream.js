@@ -41,7 +41,7 @@ export function setupStreamParser(task) {
 /**
  * 将回调驱动的行流桥接到 Async Iterator 协议。
  *
- * queryStream 使用 onRow 回调消费行数据，
+ * stream 使用 onRow 回调消费行数据，
  * 而 stream() 方法返回 AsyncIterable 供 for await 使用。
  * AsyncRowBuffer 在两者之间充当适配器：
  *  - push(row) 由 onRow 回调调用

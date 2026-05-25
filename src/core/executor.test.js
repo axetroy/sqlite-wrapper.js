@@ -69,34 +69,6 @@ describe("SQLiteExecutor", () => {
 		assert.deepEqual(rows, [{ id: 2, name: "Bob" }]);
 	});
 
-	test("queryStream 按行流式消费结果", async () => {
-		await sqlite.execute(
-			outdent`
-				CREATE TABLE IF NOT EXISTS stream_users (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					name TEXT
-				);
-
-				WITH RECURSIVE nums(value) AS (
-					SELECT 1
-					UNION ALL
-					SELECT value + 1 FROM nums WHERE value < 50
-				)
-				INSERT INTO stream_users(name)
-				SELECT 'user-' || value FROM nums;
-			`,
-		);
-
-		const rows = [];
-		await sqlite.queryStream("SELECT id, name FROM stream_users ORDER BY id ASC", (row) => {
-			rows.push(row);
-		});
-
-		assert.equal(rows.length, 50);
-		assert.deepEqual(rows[0], { id: 1, name: "user-1" });
-		assert.deepEqual(rows[49], { id: 50, name: "user-50" });
-	});
-
 	test("串行队列可正确处理并发写入", async () => {
 		await sqlite.execute("CREATE TABLE IF NOT EXISTS concurrent_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
 
@@ -158,23 +130,6 @@ describe("SQLiteExecutor", () => {
 		assert.deepEqual(rows, [{ id: 1, name: "Alice" }]);
 	});
 
-	test("queryStream 回调抛错时会拒绝当前任务", async () => {
-		await sqlite.execute(
-			outdent`
-				CREATE TABLE IF NOT EXISTS stream_fail_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);
-				INSERT INTO stream_fail_users (name) VALUES ('A');
-				INSERT INTO stream_fail_users (name) VALUES ('B');
-			`,
-		);
-
-		await assert.rejects(
-			sqlite.queryStream("SELECT * FROM stream_fail_users ORDER BY id ASC", (row) => {
-				if (row.id === 2) throw new Error("stream consumer failed");
-			}),
-			/stream consumer failed/,
-		);
-	});
-
 	test("sqlite 二进制文件缺失时后续请求会被拒绝", async () => {
 		const missingPath = path.join(os.tmpdir(), "missing-sqlite3-binary");
 		const executor = new SQLiteExecutor({ binary: missingPath, autoRestart: false });
@@ -232,7 +187,7 @@ describe("SQLiteExecutor", () => {
 		}
 	});
 
-	test("transaction 支持 query 和 queryStream 操作", async () => {
+	test("transaction 支持 query 和 stream 操作", async () => {
 		await sqlite.execute("CREATE TABLE IF NOT EXISTS tx_full (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
 		const result = await sqlite.transaction(async (tx) => {
 			await tx.execute("INSERT INTO tx_full (val) VALUES (?)", ["a"]);

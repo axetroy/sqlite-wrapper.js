@@ -4,7 +4,7 @@ import test, { describe } from "node:test";
 import { VALID_TRANSACTION_MODES, isTransactionMode, createTransactionHandle } from "./transaction.js";
 
 describe("VALID_TRANSACTION_MODES", () => {
-	test("包含三種標準事務模式", () => {
+	test("包含三种标准事务模式", () => {
 		assert.deepEqual(VALID_TRANSACTION_MODES, ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]);
 	});
 });
@@ -26,7 +26,7 @@ describe("isTransactionMode", () => {
 });
 
 describe("createTransactionHandle", () => {
-	test("創建包含 execute/query/queryStream 的句柄", () => {
+	test("创建包含 execute/query/stream 的句柄", () => {
 		let calledKind = null;
 		const mockExecutor = {
 			enqueue(kind, sql, params, options, scopeId) {
@@ -40,7 +40,25 @@ describe("createTransactionHandle", () => {
 
 		assert.ok(typeof handle.execute === "function");
 		assert.ok(typeof handle.query === "function");
-		assert.ok(typeof handle.queryStream === "function");
+		assert.ok(typeof handle.stream === "function");
+	});
+
+	test("stream 返回 AsyncIterable", async () => {
+		const collected = [];
+		const mockExecutor = {
+			enqueue(kind, sql, params, options, scopeId) {
+				options.onRow({ id: 1, name: "Alice" });
+				options.onRow({ id: 2, name: "Bob" });
+				return Promise.resolve();
+			},
+		};
+
+		const handle = createTransactionHandle(Symbol("tx"), mockExecutor);
+		for await (const row of handle.stream("SELECT * FROM t")) {
+			collected.push(row);
+		}
+		assert.equal(collected.length, 2);
+		assert.deepEqual(collected[0], { id: 1, name: "Alice" });
 	});
 
 	test("execute 委托给 executor.enqueue", async () => {
@@ -75,22 +93,5 @@ describe("createTransactionHandle", () => {
 		const result = await handle.query("SELECT 1");
 		assert.equal(calls[0].kind, "query");
 		assert.deepEqual(result, [{ id: 1 }]);
-	});
-
-	test("queryStream 委托给 executor.enqueue 并传递 onRow", async () => {
-		const calls = [];
-		const onRow = () => {};
-		const mockExecutor = {
-			enqueue(kind, sql, params, options, scopeId) {
-				calls.push({ kind, hasOnRow: typeof options.onRow === "function" });
-				return Promise.resolve();
-			},
-		};
-
-		const handle = createTransactionHandle(Symbol("tx"), mockExecutor);
-		await handle.queryStream("SELECT 1", onRow);
-
-		assert.equal(calls[0].kind, "stream");
-		assert.equal(calls[0].hasOnRow, true);
 	});
 });

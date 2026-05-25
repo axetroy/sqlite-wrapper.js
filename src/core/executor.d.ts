@@ -49,7 +49,6 @@ export interface TransactionOptions {
 export interface TransactionHandle {
 	execute(sql: string, params?: any[], options?: StatementOptions): Promise<void>;
 	query<T = any>(sql: string, params?: any[], options?: StatementOptions): Promise<T[]>;
-	queryStream<T = any>(sql: string, onRow: (row: T) => void, params?: any[], options?: StatementOptions): Promise<void>;
 	stream<T = any>(sql: string, params?: any[], options?: StatementOptions): AsyncIterable<T>;
 }
 
@@ -81,10 +80,7 @@ export declare class SQLiteExecutor implements AsyncDisposable, Disposable {
 	/** 执行查询并返回所有结果行数组 */
 	query<T = any>(sql: string, params?: any[], options?: StatementOptions): Promise<T[]>;
 
-	/** 逐行回调式查询，不缓存全部结果 */
-	queryStream<T = any>(sql: string, onRow: (row: T) => void, params?: any[], options?: StatementOptions): Promise<void>;
-
-	/** 返回异步迭代器，逐行产出结果 */
+	/** 流式执行查询，返回 AsyncIterable，可配合 `for await` 逐行消费 */
 	stream<T = any>(sql: string, params?: any[], options?: StatementOptions): AsyncIterable<T>;
 
 	/** 在事务中执行回调，所有操作在同一连接上完成 */

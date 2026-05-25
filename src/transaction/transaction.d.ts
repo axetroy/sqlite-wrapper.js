@@ -13,7 +13,7 @@ export function isTransactionMode(value: unknown): boolean;
 export interface TransactionHandle {
 	execute(sql: string, params?: any[], options?: { timeout?: number }): Promise<void>;
 	query<T = any>(sql: string, params?: any[], options?: { timeout?: number }): Promise<T[]>;
-	queryStream<T = any>(sql: string, onRow: (row: T) => void, params?: any[], options?: { timeout?: number }): Promise<void>;
+	stream<T = any>(sql: string, params?: any[], options?: { timeout?: number }): AsyncIterable<T>;
 }
 
 /**

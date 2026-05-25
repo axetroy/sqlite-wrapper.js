@@ -1,3 +1,5 @@
+import { AsyncRowBuffer } from "../stream/queryStream.js";
+
 /** SQLite 支持的三种事务模式 */
 export const VALID_TRANSACTION_MODES = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"];
 
@@ -12,19 +14,24 @@ export function isTransactionMode(value) {
 
 /**
  * 创建一个事务操作句柄。
- * 该句柄的 execute/query/queryStream 方法会自动携带 scopeId，
+ * 该句柄的 execute/query/stream 方法会自动携带 scopeId，
  * 使得事务内的所有操作被标记为属于同一事务域。
  *
  * @param {symbol} scopeId - 事务域标识
  * @param {{ enqueue(kind: string, sql: string, params: any[], options: object, scopeId: symbol | null): Promise<any> }} executor
- * @returns {{ execute: Function, query: Function, queryStream: Function }}
+ * @returns {{ execute: Function, query: Function, stream: Function }}
  */
 export function createTransactionHandle(scopeId, executor) {
 	const handle = {
 		execute: (sql, params = [], options = {}) => executor.enqueue("execute", sql, params, options, scopeId),
 		query: (sql, params = [], options = {}) => executor.enqueue("query", sql, params, options, scopeId),
-		queryStream: (sql, onRow, params = [], options = {}) =>
-			executor.enqueue("stream", sql, params, { ...options, onRow }, scopeId),
+		stream: (sql, params = []) => {
+			if (!Array.isArray(params)) throw new TypeError("params must be an array");
+			const buffer = new AsyncRowBuffer();
+			executor.enqueue("stream", sql, params, { onRow: (row) => buffer.push(row) }, scopeId)
+				.then(() => buffer.end(), (err) => buffer.error(err));
+			return buffer;
+		},
 	};
 	return handle;
 }
