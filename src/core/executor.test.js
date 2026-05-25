@@ -307,4 +307,101 @@ describe("SQLiteExecutor", () => {
 		assert.equal(rows[0].name, "Alice");
 		assert.equal(rows[0].age, null);
 	});
+
+	test("stream 使用 for await 遍历所有行", async () => {
+		await sqlite.execute(
+			"CREATE TABLE IF NOT EXISTS stream_async (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)",
+		);
+		await sqlite.execute("INSERT INTO stream_async (val) VALUES ('a'), ('b'), ('c')");
+
+		const collected = [];
+		for await (const row of sqlite.stream("SELECT * FROM stream_async ORDER BY id ASC")) {
+			collected.push(row);
+		}
+		assert.equal(collected.length, 3);
+		assert.deepEqual(collected[0], { id: 1, val: "a" });
+		assert.deepEqual(collected[1], { id: 2, val: "b" });
+		assert.deepEqual(collected[2], { id: 3, val: "c" });
+	});
+
+	test("stream 返回空结果集", async () => {
+		await sqlite.execute(
+			"CREATE TABLE IF NOT EXISTS stream_empty (id INTEGER PRIMARY KEY, name TEXT)",
+		);
+		const collected = [];
+		for await (const row of sqlite.stream("SELECT * FROM stream_empty")) {
+			collected.push(row);
+		}
+		assert.equal(collected.length, 0);
+	});
+
+	test("stream 支持参数化查询", async () => {
+		await sqlite.execute(
+			"CREATE TABLE IF NOT EXISTS stream_params (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)",
+		);
+		await sqlite.execute("INSERT INTO stream_params (val) VALUES ('x'), ('y'), ('z')");
+
+		const collected = [];
+		for await (const row of sqlite.stream("SELECT * FROM stream_params WHERE id > ? ORDER BY id ASC", [1])) {
+			collected.push(row);
+		}
+		assert.equal(collected.length, 2);
+		assert.equal(collected[0].id, 2);
+		assert.equal(collected[1].id, 3);
+	});
+
+	test("stream 在 SQL 错误时抛出异常", async () => {
+		await sqlite.execute(
+			"CREATE TABLE IF NOT EXISTS stream_error (id INTEGER PRIMARY KEY, val TEXT)",
+		);
+		await sqlite.execute("INSERT INTO stream_error VALUES (1, 'hello')");
+
+		await assert.rejects(
+			(async () => {
+				for await (const _ of sqlite.stream("SELECT * FROM stream_error WHERE invalid_col = 1")) {
+					// noop
+				}
+			})(),
+			/invalid_col|no such column/i,
+		);
+	});
+
+	test("stream 在 for await 中提前 break", async () => {
+		await sqlite.execute(
+			"CREATE TABLE IF NOT EXISTS stream_break (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)",
+		);
+		await sqlite.execute("INSERT INTO stream_break (val) VALUES ('a'), ('b'), ('c')");
+
+		const collected = [];
+		for await (const row of sqlite.stream("SELECT * FROM stream_break ORDER BY id ASC")) {
+			collected.push(row);
+			if (row.id === 2) break;
+		}
+		assert.equal(collected.length, 2);
+	});
+
+	test("stream 在事务中使用", async () => {
+		await sqlite.execute(
+			"CREATE TABLE IF NOT EXISTS stream_tx (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)",
+		);
+		await sqlite.execute("INSERT INTO stream_tx (val) VALUES ('p'), ('q')");
+
+		const result = await sqlite.transaction(async (tx) => {
+			const rows = [];
+			for await (const row of tx.stream("SELECT * FROM stream_tx ORDER BY id ASC")) {
+				rows.push(row);
+			}
+			return rows;
+		});
+		assert.equal(result.length, 2);
+		assert.equal(result[0].val, "p");
+		assert.equal(result[1].val, "q");
+	});
+
+	test("stream params 非数组时同步抛出 TypeError", () => {
+		assert.throws(
+			() => sqlite.stream("SELECT 1", "not-an-array"),
+			/params must be an array/,
+		);
+	});
 });

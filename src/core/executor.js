@@ -9,7 +9,7 @@ import { isSentinelRow } from "./protocol.js";
 import { buildPayload } from "./protocol.js";
 import { generateToken } from "../utils/token.js";
 import { createTimeoutError } from "../utils/timeout.js";
-import { setupStreamParser } from "../stream/queryStream.js";
+import { setupStreamParser, AsyncRowBuffer } from "../stream/queryStream.js";
 import { interpolateSQL } from "../utils.js";
 
 /**
@@ -96,6 +96,37 @@ export class SQLiteExecutor {
 	}
 
 	/**
+	 * 流式执行查询，返回 AsyncIterable。
+	 *
+	 * 与 queryStream 的 onRow 回调模式不同，stream() 返回实现了
+	 * AsyncIterable 协议的对象，可直接用于 for await 循环。
+	 *
+	 * 内部复用相同的 stream 任务队列机制，通过 AsyncRowBuffer
+	 * 将回调驱动的行流桥接到 async iterator 协议。
+	 *
+	 * @template T
+	 * @param {string} sql
+	 * @param {any[]} [params]
+	 * @param {{ timeout?: number }} [options]
+	 * @returns {AsyncIterable<T>}
+	 */
+	stream(sql, params = [], options = {}) {
+		if (!Array.isArray(params)) throw new TypeError("params must be an array");
+
+		const buffer = new AsyncRowBuffer();
+
+		this.#enqueue("stream", sql, params, {
+			...options,
+			onRow: (row) => buffer.push(row),
+		}, null).then(
+			() => buffer.end(),
+			(err) => buffer.error(err),
+		);
+
+		return buffer;
+	}
+
+	/**
 	 * 在一个数据库事务中执行用户函数。
 	 * 事务内所有操作共享一个域，不会被外部任务交错。
 	 * 函数成功时自动 COMMIT，抛出异常时自动 ROLLBACK。
@@ -126,6 +157,13 @@ export class SQLiteExecutor {
 			query: (sql, params = [], txOptions = {}) => this.#enqueue("query", sql, params, txOptions, scopeId),
 			queryStream: (sql, onRow, params = [], txOptions = {}) =>
 				this.#enqueue("stream", sql, params, { ...txOptions, onRow }, scopeId),
+			stream: (sql, params = [], txOptions = {}) => {
+				if (!Array.isArray(params)) throw new TypeError("params must be an array");
+				const buffer = new AsyncRowBuffer();
+				this.#enqueue("stream", sql, params, { ...txOptions, onRow: (row) => buffer.push(row) }, scopeId)
+					.then(() => buffer.end(), (err) => buffer.error(err));
+				return buffer;
+			},
 		};
 
 		try {
