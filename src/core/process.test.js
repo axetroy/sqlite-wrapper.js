@@ -52,15 +52,17 @@ describe("ProcessManager", () => {
 		const proc = pm.start();
 
 		const output = await new Promise((resolve, reject) => {
-			const chunks = [];
-			const onData = (chunk) => chunks.push(chunk);
-			proc.stdout.on("data", onData);
+			const timer = setTimeout(() => {
+				proc.stdout.removeAllListeners("data");
+				resolve("");
+			}, 5000);
+			proc.stdout.on("data", (chunk) => {
+				clearTimeout(timer);
+				proc.stdout.removeAllListeners("data");
+				resolve(String(chunk));
+			});
 			proc.once("error", reject);
 			pm.write("SELECT 1;\n");
-			setTimeout(() => {
-				proc.stdout.off("data", onData);
-				resolve(chunks.join(""));
-			}, 300);
 		});
 
 		assert.ok(output.includes("1"), `输出应包含查询结果，实际: ${output}`);
