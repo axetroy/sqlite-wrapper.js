@@ -1,3 +1,3 @@
-import { SQLiteWrapper } from "sqlite-wrapper.js";
+import { SQLiteExecutor } from "../../dist/esm/index.mjs";
 
-console.log(SQLiteWrapper);
+console.log(SQLiteExecutor);

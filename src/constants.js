@@ -1,4 +1,1 @@
-import { EOL } from "node:os";
-
-export const END_SIGNAL = `SELECT '__END__';${EOL}`;
-export const END_MARKERS = new Set([`[{"'__END__'":"__END__"}]`, "__END__"]);
+export const TOKEN_COLUMN = "__sqlite_executor_token__";

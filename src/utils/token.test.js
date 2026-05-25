@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import test, { describe } from "node:test";
+
+import { generateToken } from "./token.js";
+
+describe("generateToken", () => {
+	test("返回字符串", () => {
+		const token = generateToken();
+		assert.equal(typeof token, "string");
+	});
+
+	test("以 __executor_end__ 开头", () => {
+		const token = generateToken();
+		assert.ok(token.startsWith("__executor_end__"));
+	});
+
+	test("两次调用生成不同的 token", () => {
+		const t1 = generateToken();
+		const t2 = generateToken();
+		assert.notEqual(t1, t2);
+	});
+
+	test("包含时间戳和随机部分", () => {
+		const token = generateToken();
+		assert.ok(token.startsWith("__executor_end__"));
+		const randomPart = token.slice("__executor_end__".length);
+		assert.ok(randomPart.length > 0);
+		const parts = randomPart.split("_");
+		assert.equal(parts.length, 2, "应包含时间戳和随机数两部分");
+		assert.ok(parts[0].length > 0);
+		assert.ok(parts[1].length > 0);
+	});
+});

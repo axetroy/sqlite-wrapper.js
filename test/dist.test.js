@@ -19,8 +19,6 @@ before(() => {
 test("测试 ESM 输出", (t) => {
 	const targetDir = path.join(rootDir, "fixtures", "esm");
 
-	execSync("yarn", { cwd: targetDir, stdio: "inherit" });
-
 	const output = execSync("npm run test --no-color", {
 		cwd: targetDir,
 		stdio: "pipe",
@@ -37,8 +35,6 @@ test("测试 ESM 输出", (t) => {
 
 test("测试 CJS 输出", (t) => {
 	const targetDir = path.join(rootDir, "fixtures", "cjs");
-
-	execSync("yarn", { cwd: targetDir, stdio: "inherit" });
 
 	const output = execSync("npm run test --no-color", {
 		cwd: targetDir,

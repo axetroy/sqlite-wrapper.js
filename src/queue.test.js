@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-import { Queue } from "./queue.js";
+import { Queue } from "./core/queue.js";
 
 describe("Queue", () => {
 	test("保持先进先出顺序", () => {

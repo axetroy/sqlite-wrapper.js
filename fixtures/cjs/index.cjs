@@ -1,3 +1,3 @@
-const { SQLiteWrapper } = require("sqlite-wrapper.js");
+const { SQLiteExecutor } = require("../../dist/cjs/index.cjs");
 
-console.log(SQLiteWrapper);
+console.log(SQLiteExecutor);

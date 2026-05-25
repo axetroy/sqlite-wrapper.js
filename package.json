@@ -27,8 +27,8 @@
         }
     },
     "scripts": {
-        "test": "node --test **/*.test.js",
-        "test:update-snapshots": "node --test-update-snapshots --test **/*.test.js",
+        "test": "node --test 'src/**/*.test.js' 'src/*.test.js'",
+        "test:update-snapshots": "node --test-update-snapshots --test 'src/**/*.test.js' 'src/*.test.js'",
         "benchmark": "node benchmark/index.bench.js",
         "benchmark:queue": "node benchmark/queue.bench.js",
         "benchmark:utils": "node benchmark/utils.bench.js",
