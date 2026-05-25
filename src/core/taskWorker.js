@@ -3,6 +3,7 @@ import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRow, buildPayload } from "./protocol.js";
 import { createTimeoutError } from "../utils/timeout.js";
+import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 
 /**
  * 单个 sqlite3 进程的任务执行器。
@@ -193,20 +194,13 @@ export class TaskWorker {
 			return;
 		}
 
-		if (task.kind === "query" && Array.isArray(parsed)) {
-			task.rows.push(...parsed);
+		if (task.kind === "query") {
+			collectQueryRows(task, parsed);
 			return;
 		}
 
-		if (task.kind === "stream" && Array.isArray(parsed)) {
-			for (const row of parsed) {
-				if (task.consumerError) break;
-				try {
-					task.onRow(row);
-				} catch (error) {
-					task.consumerError = toError(error);
-				}
-			}
+		if (task.kind === "stream") {
+			processStreamRows(task, parsed);
 		}
 	}
 
@@ -226,15 +220,7 @@ export class TaskWorker {
 	}
 
 	#settleTask(task, error, value) {
-		clearTimeout(task.timer);
-		if (error) {
-			this.#metrics?.incrementTasksFailed();
-			task.reject(toError(error));
-			return;
-		}
-		const duration = task.startTime > 0 ? performance.now() - task.startTime : 0;
-		this.#metrics?.incrementTasksSuccess(duration);
-		task.resolve(value);
+		settleTask(task, error, value, this.#metrics);
 	}
 
 	#rejectAll(error) {

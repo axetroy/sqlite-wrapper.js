@@ -6,6 +6,7 @@ import { ProcessManager } from "./process.js";
 import { createJsonValueParser } from "./parser.js";
 import { toError } from "./parser.js";
 import { isSentinelRow, buildPayload, TOKEN_COLUMN } from "./protocol.js";
+import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { generateToken } from "../utils/token.js";
 import { createTimeoutError } from "../utils/timeout.js";
 import { setupStreamParser, AsyncRowBuffer } from "../stream/stream.js";
@@ -540,20 +541,12 @@ export class SQLiteExecutor {
 		}
 
 		if (task.kind === "query") {
-			if (Array.isArray(parsed)) task.rows.push(...parsed);
+			collectQueryRows(task, parsed);
 			return;
 		}
 
 		if (task.kind === "stream") {
-			if (!Array.isArray(parsed)) return;
-			for (const row of parsed) {
-				if (task.consumerError) break;
-				try {
-					task.onRow(row);
-				} catch (error) {
-					task.consumerError = toError(error);
-				}
-			}
+			processStreamRows(task, parsed);
 		}
 	}
 
@@ -633,24 +626,7 @@ export class SQLiteExecutor {
 		this.#pendingFinalizeTasks.clear();
 	}
 
-	/**
-	 * 最终结算一个任务：清除定时器、重置解析器，然后 resolve 或 reject。
-	 * @param {object} task
-	 * @param {Error | null} error
-	 * @param {any} value
-	 */
 	#settleTask(task, error, value) {
-		clearTimeout(task.timer);
-		task.rowParser?.reset?.();
-
-		if (error) {
-			this.#metrics.incrementTasksFailed();
-			task.reject(toError(error));
-			return;
-		}
-
-		const duration = task.startTime > 0 ? performance.now() - task.startTime : 0;
-		this.#metrics.incrementTasksSuccess(duration);
-		task.resolve(value);
+		settleTask(task, error, value, this.#metrics, { resetRowParser: true });
 	}
 }
