@@ -16,15 +16,17 @@ export class ReaderPool {
 	 *   poolSize: number
 	 *   statementTimeout: number
 	 *   logger?: import("../index.js").Logger
+	 *   metrics?: import("./metrics.js").Metrics
 	 * }} options
 	 */
-	constructor({ binary, database, poolSize, statementTimeout, logger }) {
+	constructor({ binary, database, poolSize, statementTimeout, logger, metrics }) {
 		for (let i = 0; i < poolSize; i++) {
 			const worker = new TaskWorker({
 				binary,
 				database,
 				statementTimeout,
 				logger,
+				metrics,
 				name: `reader-${i}`,
 				initMode: database !== ":memory:" ? "none" : "wal",
 			});

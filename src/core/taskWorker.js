@@ -23,6 +23,7 @@ export class TaskWorker {
 	#logger;
 	#name;
 	#batchSize;
+	#metrics;
 
 	/**
 	 * @param {{
@@ -33,13 +34,15 @@ export class TaskWorker {
 	 *   name?: string
 	 *   initMode?: "wal" | "none"
 	 *   batchSize?: number
+	 *   metrics?: import("./metrics.js").Metrics
 	 * }} options
 	 */
-	constructor({ binary, database, statementTimeout, logger, name, initMode, batchSize = 10 }) {
+	constructor({ binary, database, statementTimeout, logger, name, initMode, batchSize = 10, metrics }) {
 		this.#name = name ?? "worker";
 		this.#statementTimeout = statementTimeout;
 		this.#logger = logger;
 		this.#batchSize = batchSize;
+		this.#metrics = metrics;
 		this.#processManager = new ProcessManager({ binary, database, initMode });
 		this.#valueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
 		this.#startProcess();
@@ -76,7 +79,9 @@ export class TaskWorker {
 			stderrText: "",
 			errorScheduled: false,
 			timer: null,
+			startTime: 0,
 		};
+		this.#metrics?.incrementTasksTotal(config.kind);
 		this.#pendingQueue.enqueue(task);
 		this.#pumpQueue();
 	}
@@ -125,9 +130,11 @@ export class TaskWorker {
 		}
 		if (batch.length === 0) return;
 
+		const now = performance.now();
 		let payload = "";
 		for (const task of batch) {
 			payload += buildPayload(task.sql, task.token);
+			task.startTime = now;
 			task.timer = setTimeout(() => this.#handleTaskTimeout(task), task.timeout ?? this.#statementTimeout);
 		}
 		this.#inflightTasks.push(...batch);
@@ -214,15 +221,19 @@ export class TaskWorker {
 
 	#handleTaskTimeout(task) {
 		if (this.#inflightTasks[0] !== task) return;
+		this.#metrics?.incrementTasksTimeout();
 		this.#rejectAll(createTimeoutError(task.timeout, task.sql));
 	}
 
 	#settleTask(task, error, value) {
 		clearTimeout(task.timer);
 		if (error) {
+			this.#metrics?.incrementTasksFailed();
 			task.reject(toError(error));
 			return;
 		}
+		const duration = task.startTime > 0 ? performance.now() - task.startTime : 0;
+		this.#metrics?.incrementTasksSuccess(duration);
 		task.resolve(value);
 	}
 

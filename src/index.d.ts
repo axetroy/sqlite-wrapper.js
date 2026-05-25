@@ -36,6 +36,13 @@ export { buildPayload, isSentinelRow, TOKEN_COLUMN } from "./core/protocol.js";
 export { ProcessManager } from "./core/process.js";
 
 /**
+ * 运行时指标收集器。
+ * 追踪 SQL 执行任务的吞吐、耗时、错误、超时和进程重启。
+ */
+export { Metrics } from "./core/metrics.js";
+export type { MetricsSnapshot } from "./core/metrics.js";
+
+/**
  * 有效的事务隔离级别列表。
  */
 export { VALID_TRANSACTION_MODES } from "./transaction/transaction.js";

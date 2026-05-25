@@ -3,6 +3,7 @@ export { Queue } from "./core/queue.js";
 export { createJsonValueParser, createRowStreamParser } from "./core/parser.js";
 export { buildPayload, isSentinelRow, TOKEN_COLUMN } from "./core/protocol.js";
 export { ProcessManager } from "./core/process.js";
+export { Metrics } from "./core/metrics.js";
 export { VALID_TRANSACTION_MODES } from "./transaction/transaction.js";
 export { generateToken } from "./utils/token.js";
 export { DEFAULT_STATEMENT_TIMEOUT, createTimeoutError } from "./utils/timeout.js";

@@ -13,6 +13,7 @@ import { setupStreamParser, AsyncRowBuffer } from "../stream/queryStream.js";
 import { interpolateSQL } from "../utils.js";
 import { classifySQL } from "./classifier.js";
 import { ReaderPool } from "./readerPool.js";
+import { Metrics } from "./metrics.js";
 
 /**
  * SQLite 执行器。
@@ -37,6 +38,7 @@ export class SQLiteExecutor {
 	#poolSize;
 	#binary;
 	#database;
+	#metrics;
 
 	/**
 	 * @param {{
@@ -46,15 +48,17 @@ export class SQLiteExecutor {
 	 *   statementTimeout?: number,
 	 *   autoRestart?: boolean,
 	 *   poolSize?: number,
+	 *   metrics?: import("./metrics.js").Metrics,
 	 * }} options
 	 */
-	constructor({ binary = "sqlite3", database = ":memory:", logger, statementTimeout = DEFAULT_STATEMENT_TIMEOUT, autoRestart = true, poolSize = 0 } = {}) {
+	constructor({ binary = "sqlite3", database = ":memory:", logger, statementTimeout = DEFAULT_STATEMENT_TIMEOUT, autoRestart = true, poolSize = 0, metrics } = {}) {
 		this.#logger = logger;
 		this.#statementTimeout = this.#normalizeTimeout(statementTimeout);
 		this.#autoRestart = autoRestart !== false;
 		this.#binary = binary;
 		this.#database = database;
 		this.#poolSize = poolSize;
+		this.#metrics = metrics ?? new Metrics();
 
 		this.#processManager = new ProcessManager({ binary, database });
 		this.#startProcess();
@@ -66,6 +70,7 @@ export class SQLiteExecutor {
 				poolSize,
 				statementTimeout,
 				logger,
+				metrics: this.#metrics,
 			});
 		}
 	}
@@ -78,6 +83,11 @@ export class SQLiteExecutor {
 	/** 读取器连接池（null 表示未启用读写分离）。 */
 	get readerPool() {
 		return this.#readerPool;
+	}
+
+	/** 运行时指标收集器。 */
+	get metrics() {
+		return this.#metrics;
 	}
 
 	/**
@@ -336,6 +346,7 @@ export class SQLiteExecutor {
 	 * @returns {Promise<any>}
 	 */
 	#enqueueWriter(kind, sql, timeout, token, onRow, scopeId) {
+		this.#metrics.incrementTasksTotal(kind);
 		return new Promise((resolve, reject) => {
 			const task = {
 				kind,
@@ -351,6 +362,7 @@ export class SQLiteExecutor {
 				stderrText: "",
 				errorScheduled: false,
 				timer: null,
+				startTime: 0,
 				valueParser: null,
 				rowParser: null,
 			};
@@ -404,6 +416,7 @@ export class SQLiteExecutor {
 		if (!task) return;
 
 		this.#currentTask = task;
+		task.startTime = performance.now();
 		task.timer = setTimeout(() => {
 			this.#handleTaskTimeout(task);
 		}, task.timeout);
@@ -509,6 +522,7 @@ export class SQLiteExecutor {
 	 */
 	#handleTaskTimeout(task) {
 		if (task !== this.#currentTask) return;
+		this.#metrics.incrementTasksTimeout();
 		this.#handleProcessFailure(createTimeoutError(task.timeout, task.sql));
 	}
 
@@ -526,6 +540,7 @@ export class SQLiteExecutor {
 		this.#rejectQueues(failure);
 
 		if (!this.#closed && this.#autoRestart) {
+			this.#metrics.incrementProcessRestarts();
 			this.#startProcess();
 			return;
 		}
@@ -608,10 +623,13 @@ export class SQLiteExecutor {
 		task.rowParser?.reset?.();
 
 		if (error) {
+			this.#metrics.incrementTasksFailed();
 			task.reject(toError(error));
 			return;
 		}
 
+		const duration = task.startTime > 0 ? performance.now() - task.startTime : 0;
+		this.#metrics.incrementTasksSuccess(duration);
 		task.resolve(value);
 	}
 }

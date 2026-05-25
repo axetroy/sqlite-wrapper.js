@@ -26,6 +26,11 @@ export interface SQLiteExecutorOptions {
 	 * - `:memory:` 数据库忽略此选项（始终为 0）
 	 */
 	poolSize?: number;
+	/**
+	 * 运行时指标收集器。
+	 * 未指定时自动创建内部实例。
+	 */
+	metrics?: import("./metrics.js").Metrics;
 }
 
 /** 单条语句的执行选项 */
@@ -66,6 +71,9 @@ export declare class SQLiteExecutor implements AsyncDisposable, Disposable {
 	 * - 否则返回 null
 	 */
 	get readerPool(): import("./readerPool.js").ReaderPool | null;
+
+	/** 运行时指标收集器。 */
+	get metrics(): import("./metrics.js").Metrics;
 
 	/** 执行写操作（INSERT/UPDATE/CREATE 等），返回无行结果 */
 	execute(sql: string, params?: any[], options?: StatementOptions): Promise<void>;
