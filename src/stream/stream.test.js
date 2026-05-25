@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-import { setupStreamParser, createRowStreamParser, AsyncRowBuffer } from "./queryStream.js";
+import { setupStreamParser, createRowStreamParser, AsyncRowBuffer } from "./stream.js";
 
 describe("setupStreamParser", () => {
 	test("stream 类型任务创建行流解析器", () => {

@@ -1,4 +1,4 @@
-import { AsyncRowBuffer } from "../stream/queryStream.js";
+import { AsyncRowBuffer } from "../stream/stream.js";
 
 /** SQLite 支持的三种事务模式 */
 export const VALID_TRANSACTION_MODES = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"];

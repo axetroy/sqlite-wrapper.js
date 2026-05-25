@@ -8,7 +8,7 @@ import { toError } from "./parser.js";
 import { isSentinelRow, buildPayload, TOKEN_COLUMN } from "./protocol.js";
 import { generateToken } from "../utils/token.js";
 import { createTimeoutError } from "../utils/timeout.js";
-import { setupStreamParser, AsyncRowBuffer } from "../stream/queryStream.js";
+import { setupStreamParser, AsyncRowBuffer } from "../stream/stream.js";
 import { interpolateSQL, normalizeSQL } from "../utils.js";
 import { classifySQL } from "./classifier.js";
 import { ReaderPool } from "./readerPool.js";

@@ -845,7 +845,7 @@ src/
  │    └── transaction.js    # 事务工具（VALID_TRANSACTION_MODES, createTransactionHandle）
  │
  ├── stream/
- │    └── queryStream.js    # 流式查询（setupStreamParser, AsyncRowBuffer）
+ │    └── stream.js         # 流式查询（setupStreamParser, AsyncRowBuffer）
  │
  ├── utils/
  │    ├── timeout.js        # 超时控制
