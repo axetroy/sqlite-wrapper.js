@@ -76,17 +76,34 @@ const printDownloadInfo = (() => {
 })();
 
 /**
- * 缓存下载/解压的 Promise，防止多个测试文件并行调用时重复下载或解压冲突（ETXTBSY）。
+ * 在目录树中查找 sqlite3 可执行文件。
+ * zip 解压后会包含一层版本目录（如 sqlite-tools-linux-x64-3490100/）。
+ */
+function findSqlite3(dir) {
+	const sqlite3Name = "sqlite3" + (process.platform === "win32" ? ".exe" : "");
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		if (entry.isDirectory()) {
+			const candidate = path.join(dir, entry.name, sqlite3Name);
+			if (fs.existsSync(candidate)) return candidate;
+		}
+		const candidate = path.join(dir, sqlite3Name);
+		if (fs.existsSync(candidate)) return candidate;
+	}
+	return null;
+}
+
+/**
+ * 缓存下载/解压 Promise，避免同一 Worker 内重复下载。
+ * 不跨 Worker 共享（Node.js --test 每个文件独立 Worker）。
  * @type {Promise<void> | null}
  */
 let downloadPromise = null;
 
 async function main() {
-	// 如果已有下载/解压在进行中，直接等待
 	if (downloadPromise) return downloadPromise;
 
-	const sqlite3ToolZip = join(ROOT, "bin", "sqlite3-tool.zip");
-	const sqlite3Path = join(ROOT, "bin", "sqlite3" + (process.platform === "win32" ? ".exe" : ""));
+	const sqlite3Name = "sqlite3" + (process.platform === "win32" ? ".exe" : "");
+	const sqlite3Path = join(ROOT, "bin", sqlite3Name);
 
 	if (fs.existsSync(sqlite3Path)) {
 		printDownloadInfo();
@@ -96,25 +113,39 @@ async function main() {
 	downloadPromise = (async () => {
 		console.log("Downloading SQLite3...");
 
-		const url = getSQLte3URL();
+		// 在 bin/ 下创建唯一的工作目录，避免多个 Worker 并行下载时共享文件冲突
+		const workDir = fs.mkdtempSync(join(ROOT, "bin", ".sqlite3-dl-"));
+		const zipPath = join(workDir, "sqlite3-tool.zip");
 
-		await downloadFileWithProgress(url, sqlite3ToolZip).catch((error) => {
-			fs.rmSync(sqlite3ToolZip, { force: true });
-			throw error;
-		});
+		try {
+			const url = getSQLte3URL();
 
-		console.log("SQLite3 downloaded successfully.");
+			await downloadFileWithProgress(url, zipPath).catch((error) => {
+				throw error;
+			});
 
-		const zip = new AdmZip(sqlite3ToolZip);
+			console.log("SQLite3 downloaded successfully.");
 
-		zip.extractAllTo(join(ROOT, "bin"), true);
+			const extractedDir = join(workDir, "extracted");
+			fs.mkdirSync(extractedDir);
 
-		if (process.platform !== "win32") {
-			// 赋予执行权限
-			fs.chmodSync(sqlite3Path, 0o755);
+			const zip = new AdmZip(zipPath);
+			zip.extractAllTo(extractedDir, true);
+
+			const sqlite3InDir = findSqlite3(extractedDir);
+			if (!sqlite3InDir) throw new Error("sqlite3 binary not found in extracted zip");
+
+			if (process.platform !== "win32") {
+				fs.chmodSync(sqlite3InDir, 0o755);
+			}
+
+			// 原子重命名：不会触发 Linux ETXTBSY（不写入正在执行的二进制文件）
+			fs.renameSync(sqlite3InDir, sqlite3Path);
+
+			console.log("Setting up SQLite3...");
+		} finally {
+			fs.rmSync(workDir, { recursive: true, force: true });
 		}
-
-		console.log("Setting up SQLite3...");
 	})();
 
 	try {
