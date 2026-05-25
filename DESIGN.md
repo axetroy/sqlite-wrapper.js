@@ -457,9 +457,9 @@ Queue
 
 ---
 
-## 9.3 Promise Queue
+## 9.3 Promise Queue 与管线化
 
-推荐结构：
+主 Executor 使用串行队列，一次仅允许一个 active task：
 
 ```text id="r7v1p3"
 [
@@ -472,7 +472,16 @@ Queue
 ]
 ```
 
-一次仅允许一个 active task。
+但 **TaskWorker**（用于 ReaderPool）支持 **管线化（Pipelining）**：
+将多个 SQL payload 合并为一次 `stdin.write()` 发送，由 sqlite3 顺序执行后，
+在 stdout 解析时按 FIFO 顺序匹配 sentinel token 逐一完成 Promise。
+
+```text id="pipeline-flow"
+stdin:  [SQL_A][SENTINEL_A][SQL_B][SENTINEL_B]  ← 一次写入
+stdout: [RESULT_A][SENTINEL_A][RESULT_B][SENTINEL_B]  ← 依次解析
+```
+
+管线化批量大小由 `batchSize` 控制（默认 10）。
 
 ---
 
@@ -502,29 +511,31 @@ stdout.on("data");
 
 ---
 
-## 10.2 推荐方案
+## 10.2 实际方案：流式 JSON 值解析器
 
-使用：
+本项目不使用 readline，而是实现了自定义的 **`createJsonValueParser`**：
 
-```js id="p9v4x8"
-readline.createInterface();
+- 逐字符扫描流式数据，通过括号/花括号嵌套计数检测完整的顶层 JSON 值
+- 支持分块输入，通过 `readPos` 避免重复扫描已处理数据
+- 每次解析出一个完整 JSON 值后通过回调通知
+
+对于 **stream 类型**（流式读取），额外使用 **`createRowStreamParser`**：
+- 在 JSON 数组内逐元素回调 `onRow`，避免一次性解析全部结果
+- 支持跨分块的元素解析
+
+```text id="parser-flow"
+stdout chunk
+    │
+    ▼
+createJsonValueParser
+    │ 识别完整 JSON 值
+    ▼
+#handleParsedValue / #handleJsonValue
+    │
+    ├── isSentinelRow → 任务结束 / reject
+    ├── query 结果数组 → task.rows.push
+    └── stream 类型 → onRow 逐行回调
 ```
-
-按行解析：
-
-```js id="m5t1r7"
-const rl = readline.createInterface({
-	input: proc.stdout,
-});
-```
-
-然后：
-
-```js id="x2c8n4"
-rl.on("line");
-```
-
-进行协议解析。
 
 ---
 
@@ -611,22 +622,32 @@ Node.js 内存暴涨
 
 ## 12.2 流式读取
 
-推荐：
+提供两种 API：
+
+**1. 回调模式：**
 
 ```js id="k3m8t1"
-queryStream(sql, onRow);
+await db.queryStream(sql, (row) => { ... });
+```
+
+**2. Async Iterator 模式（推荐）：**
+
+```js id="v6k1x9"
+for await (const row of db.stream(sql)) {
+	console.log(row);
+}
 ```
 
 模式：
 
 ```text id="p7x4v9"
-stdout line
+stdout chunk
    │
    ▼
-JSON.parse
-   │
+createRowStreamParser
+   │ 逐元素
    ▼
-onRow(row)
+onRow(row)  /  AsyncRowBuffer → for await
 ```
 
 而不是：
@@ -818,23 +839,30 @@ stdin/stdout 模式：
 ```text id="q7p2v5"
 src/
  ├── core/
- │    ├── executor.js
- │    ├── parser.js
- │    ├── protocol.js
- │    ├── queue.js
- │    └── process.js
+ │    ├── executor.js      # SQLiteExecutor：主入口，串行队列 + 事务 + 自动重启
+ │    ├── taskWorker.js     # TaskWorker：单进程任务执行器，支持管线化
+ │    ├── readerPool.js     # ReaderPool：只读连接池，round-robin 分发
+ │    ├── metrics.js        # Metrics：运行时指标收集器
+ │    ├── classifier.js     # SQL 分类器（read / write）用于读写分离
+ │    ├── parser.js         # JSON 流式解析器（createJsonValueParser / createRowStreamParser）
+ │    ├── protocol.js       # Sentinel 协议（buildPayload / isSentinelRow）
+ │    ├── queue.js          # 双端队列
+ │    └── process.js        # 子进程管理器
  │
  ├── transaction/
- │    └── transaction.js
+ │    └── transaction.js    # 事务工具（VALID_TRANSACTION_MODES, createTransactionHandle）
  │
  ├── stream/
- │    └── queryStream.js
+ │    └── queryStream.js    # 流式查询（setupStreamParser, AsyncRowBuffer）
  │
  ├── utils/
- │    ├── timeout.js
- │    └── token.js
+ │    ├── timeout.js        # 超时控制
+ │    └── token.js          # 唯一 token 生成
  │
- └── index.js
+ ├── constants.js           # 共享常量（TOKEN_COLUMN）
+ ├── utils.js               # SQL 工具（normalizeSQL, interpolateSQL, escapeValue）
+ ├── which.js               # 可执行文件查找
+ └── index.js               # 模块入口
 ```
 
 ---
@@ -923,34 +951,43 @@ sqlite3 CLI 负责：
 
 ## 19.2 核心技术点
 
-| 技术点        | 重要程度 |
-| ------------- | -------- |
-| 长连接        | 极高     |
-| Sentinel 协议 | 极高     |
-| Queue 串行化  | 极高     |
-| stdout 行解析 | 极高     |
-| 超时控制      | 高       |
-| 崩溃恢复      | 高       |
-| 流式读取      | 高       |
-| WAL 模式      | 高       |
+| 技术点          | 重要程度 |
+| --------------- | -------- |
+| 长连接          | 极高     |
+| Sentinel 协议   | 极高     |
+| Queue 串行化    | 极高     |
+| stdout 流解析   | 极高     |
+| 管线化 Pipelining | 高     |
+| 读写分离        | 高       |
+| 超时控制        | 高       |
+| 崩溃恢复        | 高       |
+| 流式读取        | 高       |
+| WAL 模式        | 高       |
+| 运行时指标      | 中       |
+| SQL 分类器      | 中       |
+| 只读连接池      | 中       |
 
 ---
 
-## 19.3 最终架构
+## 19.3 实际架构
 
 ```text id="y6v2k9"
-Node.js
+Node.js — SQLiteExecutor
   │
-  ├── Queue Scheduler
-  ├── SQL Protocol
-  ├── Stream Parser
-  ├── Transaction Manager
-  ├── Timeout Manager
-  ├── Crash Recovery
-  └── Query Stream
+  ├── Queue Scheduler（串行队列 + 事务域隔离）
+  ├── SQL Protocol（buildPayload / isSentinelRow）
+  ├── Stream Parser（createJsonValueParser / createRowStreamParser）
+  ├── Transaction Manager（BEGIN / COMMIT / ROLLBACK）
+  ├── Timeout Manager（setTimeout + process级故障恢复）
+  ├── Crash Recovery（autoRestart）
+  ├── SQL Classifier（classifySQL：区分 read / write）
+  ├── ReaderPool（多个 TaskWorker，round-robin 分发只读任务）
+  │     └── TaskWorker（单进程执行器，支持管线化 batch）
+  ├── Metrics（QPS / avgQueryTime / timeoutCount / ...）
+  └── Query Stream（AsyncRowBuffer → AsyncIterator）
           │
           ▼
-sqlite3 executable
+sqlite3 executable (--json mode)
           │
           ▼
 SQLite Database
@@ -958,54 +995,38 @@ SQLite Database
 
 ---
 
-# 20. 后续扩展方向
+# 20. 已实现 & 后续扩展方向
+
+> ✅ = 已实现的核心功能 ｜ 其余为后续扩展方向
 
 # 20.1 多进程执行架构
+
+✅ **已实现** — 见 `ReaderPool` / `TaskWorker`
 
 当前架构：
 
 ```text id="r2m8x5"
-Node.js
-   ⇄
-sqlite3 process
+Node.js SQLiteExecutor
+   │
+   ├── Writer（ProcessManager，单进程）
+   └── ReaderPool
+         ├── TaskWorker-0
+         ├── TaskWorker-1
+         └── TaskWorker-2
 ```
 
-属于：
-
-```text id="n7v3k1"
-单 Executor
-```
-
-后续可扩展为：
-
-```text id="m4p9x2"
-Executor Pool
-```
-
-架构：
-
-```text id="x8k5v3"
-┌────────────────────┐
-│   Executor Pool    │
-├────────────────────┤
-│ executor-1         │
-│ executor-2         │
-│ executor-3         │
-└────────────────────┘
-```
+其中 ReaderPool 使用 **Round Robin** 策略分发只读任务，写操作始终由 writer 进程执行（**Read/Write Split**）。
 
 ---
 
 ## 20.1.1 调度策略
 
-可实现：
-
-| 策略             | 说明     |
-| ---------------- | -------- |
-| Round Robin      | 轮询     |
-| Least Busy       | 最小负载 |
-| Read/Write Split | 读写分离 |
-| Sticky Session   | 会话固定 |
+| 策略             | 说明       | 状态   |
+| ---------------- | ---------- | ------ |
+| Round Robin      | 轮询       | ✅ 已实现 |
+| Read/Write Split | 读写分离   | ✅ 已实现 |
+| Least Busy       | 最小负载   | ❌ 待实现 |
+| Sticky Session   | 会话固定   | ❌ 待实现 |
 
 ---
 
@@ -1252,11 +1273,7 @@ sqlite-vector
 
 ## 20.9.1 Async Iterator
 
-后续可升级：
-
-```text id="p2x7m4"
-Async Iterator
-```
+✅ **已实现** — `SQLiteExecutor.stream()` 返回 `AsyncIterable<T>`
 
 API：
 
@@ -1265,6 +1282,8 @@ for await (const row of db.stream(sql)) {
 	console.log(row);
 }
 ```
+
+内部通过 `AsyncRowBuffer` 将回调驱动的行流桥接到 async iterator 协议，支持提前 `break`。
 
 ---
 
@@ -1371,21 +1390,25 @@ db.use(plugin);
 
 ## 20.15.1 Runtime Metrics
 
-后续可加入：
-
-```text id="k1m8x6"
-Performance Metrics
-```
+✅ **已实现** — `Metrics` 类，`SQLiteExecutor.metrics` / `metrics.snapshot()`
 
 统计：
 
-| 指标            | 说明     |
-| --------------- | -------- |
-| QPS             | 查询吞吐 |
-| Queue Length    | 队列长度 |
-| Avg Query Time  | 平均耗时 |
-| Timeout Count   | 超时数   |
-| Process Restart | 重启次数 |
+| 指标              | 说明              | 获取方式                  |
+| ----------------- | ----------------- | ------------------------- |
+| tasksTotal        | 任务总数          | `metrics.snapshot().qps`   |
+| tasksSuccess      | 成功任务数        | `metrics.snapshot().tasksSuccess` |
+| tasksFailed       | 失败任务数        | `metrics.snapshot().tasksFailed`  |
+| tasksTimeout      | 超时任务数        | `metrics.snapshot().tasksTimeout` |
+| processRestarts   | 进程重启次数      | `metrics.snapshot().processRestarts` |
+| executeCount      | execute 执行次数  | `metrics.executeCount`     |
+| queryCount        | query 执行次数    | `metrics.queryCount`       |
+| streamCount       | stream 执行次数   | `metrics.streamCount`      |
+| avgQueryTime      | 平均耗时（ms）    | `metrics.snapshot().avgQueryTime` |
+| qps               | 每秒查询数        | `metrics.snapshot().qps`    |
+| uptime            | 运行时间（秒）    | `metrics.snapshot().uptime` |
+
+Metrics 实例可通过构造参数传入，支持多个 Executor / TaskWorker 共享同一实例。
 
 ---
 
