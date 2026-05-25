@@ -247,6 +247,15 @@ export function normalizeSQL(sql) {
 		const code = sql.charCodeAt(i);
 		const nextCode = sql.charCodeAt(i + 1);
 
+		if (state === STATE_BLOCK_COMMENT) {
+			if (code === CC_STAR && nextCode === CC_SLASH) {
+				state = STATE_NORMAL;
+				i++;
+				if (writePos > 0) pendingSpace = true;
+			}
+			continue;
+		}
+
 		if (state === STATE_LINE_COMMENT) {
 			if (code === CC_NEWLINE) {
 				state = STATE_NORMAL;
@@ -258,6 +267,11 @@ export function normalizeSQL(sql) {
 		if (state === STATE_NORMAL) {
 			if (code === CC_DASH && nextCode === CC_DASH) {
 				state = STATE_LINE_COMMENT;
+				i++;
+				continue;
+			}
+			if (code === CC_SLASH && nextCode === CC_STAR) {
+				state = STATE_BLOCK_COMMENT;
 				i++;
 				continue;
 			}

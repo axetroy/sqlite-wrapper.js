@@ -168,4 +168,126 @@ describe("createRowStreamParser", () => {
 		assert.equal(rows[0], '{"msg":"hello \\"world\\""}');
 		assert.equal(rows[1], '{"msg":"ok"}');
 	});
+
+	test("深层嵌套 JSON 对象", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		let inner = "1";
+		for (let i = 0; i < 100; i++) {
+			inner = `{"a":${inner}}`;
+		}
+		parser.feed(inner);
+		assert.equal(values.length, 1);
+		const parsed = JSON.parse(values[0]);
+		let depth = 0;
+		let cur = parsed;
+		while (typeof cur === "object" && cur !== null) {
+			depth++;
+			cur = cur.a;
+		}
+		assert.equal(depth, 100);
+	});
+
+	test("空字符串输入不产生解析结果", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		parser.feed("");
+		assert.equal(values.length, 0);
+	});
+
+	test("仅空白字符输入不产生解析结果", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		parser.feed("   \n\t  ");
+		assert.equal(values.length, 0);
+	});
+
+	test("Unicode 字符串正确解析", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		parser.feed('{"msg":"你好世界 🎉"}');
+		assert.equal(values.length, 1);
+		assert.equal(values[0], '{"msg":"你好世界 🎉"}');
+	});
+
+	test("JSON 数组中包含 unicode 字符串", () => {
+		const rows = [];
+		const parser = createRowStreamParser((raw) => rows.push(raw));
+		parser.feed('[{"name":"Alice"},{"name":"😀"}]');
+		assert.equal(rows.length, 2);
+		assert.equal(rows[0], '{"name":"Alice"}');
+		assert.equal(rows[1], '{"name":"😀"}');
+	});
+
+	test("feed 多个值逐个回调", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		parser.feed('{"a":1}{"b":2}{"c":3}');
+		assert.equal(values.length, 3);
+		assert.equal(values[0], '{"a":1}');
+		assert.equal(values[1], '{"b":2}');
+		assert.equal(values[2], '{"c":3}');
+	});
+
+	test("跨分块解析字符串中的转义反斜杠", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		parser.feed('{"path":"C:\\\\Users\\\\');
+		parser.feed('test"}');
+		assert.equal(values.length, 1);
+		assert.equal(values[0], '{"path":"C:\\\\Users\\\\test"}');
+	});
+
+	test("toError 将各种非 Error 值包装为 Error", () => {
+		const err1 = toError("string error");
+		assert.ok(err1 instanceof Error);
+		assert.ok(err1.message.includes("string error"));
+
+		const err2 = toError(42);
+		assert.ok(err2 instanceof Error);
+		assert.equal(err2.message, "42");
+
+		const err3 = toError(null);
+		assert.ok(err3 instanceof Error);
+
+		const err4 = toError({ custom: "obj" });
+		assert.ok(err4 instanceof Error);
+		assert.ok(err4.message.includes("[object Object]"));
+
+		const err5 = toError(undefined);
+		assert.ok(err5 instanceof Error);
+	});
+
+	test("row stream parser 连续 reset 重新解析", () => {
+		const rows = [];
+		const parser = createRowStreamParser((raw) => rows.push(raw));
+		parser.feed('[{"n":1}]');
+		assert.equal(rows.length, 1);
+		parser.reset();
+		parser.feed('[{"n":2}]');
+		assert.equal(rows.length, 2);
+		parser.reset();
+		parser.feed('[{"n":3}]');
+		assert.equal(rows.length, 3);
+		assert.equal(rows[0], '{"n":1}');
+		assert.equal(rows[1], '{"n":2}');
+		assert.equal(rows[2], '{"n":3}');
+	});
+
+	test("row stream parser 空数组返回无元素", () => {
+		const rows = [];
+		const parser = createRowStreamParser((raw) => rows.push(raw));
+		const leftover = parser.feed("[]");
+		assert.equal(rows.length, 0);
+		assert.equal(parser.finished, true);
+		assert.equal(leftover, "");
+	});
+
+	test("row stream parser 数组中只有一个元素", () => {
+		const rows = [];
+		const parser = createRowStreamParser((raw) => rows.push(raw));
+		parser.feed('[{"id":1}]');
+		assert.equal(rows.length, 1);
+		assert.equal(rows[0], '{"id":1}');
+	});
 });

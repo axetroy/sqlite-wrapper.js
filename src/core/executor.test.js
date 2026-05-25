@@ -196,4 +196,115 @@ describe("SQLiteExecutor", () => {
 			["rejected", "rejected"],
 		);
 	});
+
+	test("pendingStatements 返回待处理任务数", async () => {
+		assert.equal(sqlite.pendingStatements, 0);
+		const p1 = sqlite.query("SELECT 1");
+		assert.equal(sqlite.pendingStatements, 1);
+		const p2 = sqlite.query("SELECT 2");
+		assert.equal(sqlite.pendingStatements, 2);
+		await p1;
+		await p2;
+		assert.equal(sqlite.pendingStatements, 0);
+	});
+
+	test("query 返回空结果集", async () => {
+		await sqlite.execute(
+			"CREATE TABLE IF NOT EXISTS empty_test (id INTEGER PRIMARY KEY, name TEXT)",
+		);
+		const rows = await sqlite.query("SELECT * FROM empty_test WHERE id = -1");
+		assert.deepEqual(rows, []);
+	});
+
+	test("execute 空 SQL 不会报错", async () => {
+		await sqlite.execute("");
+	});
+
+	test("多次 close 安全（幂等性）", async () => {
+		await sqlite.close();
+		await sqlite.close();
+	});
+
+	test("使用 :memory: 数据库创建 executor", async () => {
+		const mem = new SQLiteExecutor({ binary: SQLite3BinaryFile });
+		try {
+			const result = await mem.query("SELECT 1 AS val");
+			assert.deepEqual(result, [{ val: 1 }]);
+		} finally {
+			await mem.close();
+		}
+	});
+
+	test("transaction 支持 query 和 queryStream 操作", async () => {
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS tx_full (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+		const result = await sqlite.transaction(async (tx) => {
+			await tx.execute("INSERT INTO tx_full (val) VALUES (?)", ["a"]);
+			await tx.execute("INSERT INTO tx_full (val) VALUES (?)", ["b"]);
+			const rows = await tx.query("SELECT * FROM tx_full ORDER BY id ASC");
+			return rows;
+		});
+		assert.equal(result.length, 2);
+		assert.equal(result[0].val, "a");
+		assert.equal(result[1].val, "b");
+	});
+
+	test("transaction 使用非法的 mode 抛出 TypeError", async () => {
+		await assert.rejects(
+			sqlite.transaction(async () => {}, { mode: "INVALID" }),
+			/transaction mode must be one of/,
+		);
+	});
+
+	test("statementTimeout 为非法值时抛出 TypeError", () => {
+		assert.throws(() => new SQLiteExecutor({ binary: SQLite3BinaryFile, statementTimeout: -1 }), /positive integer/);
+		assert.throws(() => new SQLiteExecutor({ binary: SQLite3BinaryFile, statementTimeout: 0 }), /positive integer/);
+		assert.throws(() => new SQLiteExecutor({ binary: SQLite3BinaryFile, statementTimeout: 1.5 }), /positive integer/);
+	});
+
+	test("多次 transaction 按顺序执行不交错", async () => {
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS seq_tx (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+
+		const results = [];
+		await Promise.all([
+			sqlite.transaction(async (tx) => {
+				await tx.execute("INSERT INTO seq_tx (val) VALUES (?)", ["tx1"]);
+				await new Promise((r) => setTimeout(r, 50));
+				await tx.execute("INSERT INTO seq_tx (val) VALUES (?)", ["tx1-late"]);
+			}),
+			sqlite.transaction(async (tx) => {
+				await tx.execute("INSERT INTO seq_tx (val) VALUES (?)", ["tx2"]);
+			}),
+		]);
+
+		const rows = await sqlite.query("SELECT val FROM seq_tx ORDER BY id ASC");
+		const vals = rows.map((r) => r.val);
+		assert.equal(vals.length, 3, "三个插入都应成功");
+	});
+
+	test("多个 executor 实例独立运行", async () => {
+		const sqlite2 = new SQLiteExecutor({ binary: SQLite3BinaryFile });
+		try {
+			await sqlite.execute("CREATE TABLE IF NOT EXISTS exec_a (id INTEGER PRIMARY KEY, name TEXT)");
+			await sqlite2.execute("CREATE TABLE IF NOT EXISTS exec_b (id INTEGER PRIMARY KEY, name TEXT)");
+			await sqlite.execute("INSERT INTO exec_a VALUES (1, 'from-a')");
+			await sqlite2.execute("INSERT INTO exec_b VALUES (1, 'from-b')");
+			const rowsA = await sqlite.query("SELECT * FROM exec_a");
+			const rowsB = await sqlite2.query("SELECT * FROM exec_b");
+			assert.equal(rowsA[0].name, "from-a");
+			assert.equal(rowsB[0].name, "from-b");
+		} finally {
+			await sqlite2.close();
+		}
+	});
+
+	test("query 结果中包含 null 值", async () => {
+		await sqlite.execute(
+			"CREATE TABLE IF NOT EXISTS null_test (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)",
+		);
+		await sqlite.execute("INSERT INTO null_test VALUES (1, 'Alice', NULL)");
+		const rows = await sqlite.query("SELECT * FROM null_test");
+		assert.equal(rows.length, 1);
+		assert.equal(rows[0].name, "Alice");
+		assert.equal(rows[0].age, null);
+	});
 });

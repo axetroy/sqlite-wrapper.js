@@ -70,9 +70,7 @@ describe("normalizeSQL", () => {
 	});
 
 	test("折叠空白前去除行注释", () => {
-		const sql = normalizeSQL(
-			"CREATE TABLE t (\n  id INTEGER, -- primary key\n  name TEXT    -- display name\n);",
-		);
+		const sql = normalizeSQL("CREATE TABLE t (\n  id INTEGER, -- primary key\n  name TEXT    -- display name\n);");
 		assert.equal(sql, "CREATE TABLE t ( id INTEGER, name TEXT );");
 	});
 
@@ -94,5 +92,75 @@ describe("normalizeSQL", () => {
 	test("处理含行注释的多语句 SQL", () => {
 		const sql = normalizeSQL("INSERT INTO t VALUES (1); -- first row\nINSERT INTO t VALUES (2); -- second row");
 		assert.equal(sql, "INSERT INTO t VALUES (1); INSERT INTO t VALUES (2);");
+	});
+
+	test("去除块注释 /* */", () => {
+		const sql = normalizeSQL("SELECT /* comment */ 1");
+		assert.equal(sql, "SELECT 1;");
+	});
+
+	test("块注释跨行被去除，末尾空格规范化保留", () => {
+		const sql = normalizeSQL("SELECT 1 /* line1\nline2 */ ;");
+		assert.equal(sql, "SELECT 1 ;");
+	});
+
+	test("字符串内的 /* 不被当作块注释开始", () => {
+		const sql = normalizeSQL("SELECT '/* not a comment'");
+		assert.equal(sql, "SELECT '/* not a comment';");
+	});
+
+	test("字符串内的 */ 不被当作块注释结束", () => {
+		const sql = normalizeSQL("SELECT '*/ not a comment end'");
+		assert.equal(sql, "SELECT '*/ not a comment end';");
+	});
+
+	test("行注释和块注释都被去除", () => {
+		const sql = normalizeSQL("SELECT 1; -- row\n/* block */ SELECT 2");
+		assert.equal(sql, "SELECT 1; SELECT 2;");
+	});
+
+	test("只有空白和注释的 SQL 返回 ;", () => {
+		assert.equal(normalizeSQL("  -- just a comment\n  /* another */  "), ";");
+	});
+
+	test("空字符串返回 ;", () => {
+		assert.equal(normalizeSQL(""), ";");
+	});
+
+	test("重复分号被折叠为单个", () => {
+		assert.equal(normalizeSQL("SELECT 1;;;"), "SELECT 1;");
+	});
+
+	test("Unicode 字符串内容无损", () => {
+		const sql = normalizeSQL("SELECT '你好世界 🎉'");
+		assert.equal(sql, "SELECT '你好世界 🎉';");
+	});
+
+	test("interpolateSQL 没有占位符时原样返回", () => {
+		assert.equal(interpolateSQL("SELECT 1", []), "SELECT 1");
+	});
+
+	test("interpolateSQL 不含 ? 但无参数时不报错", () => {
+		assert.equal(interpolateSQL("SELECT 1", []), "SELECT 1");
+	});
+
+	test("interpolateSQL 含 ? 但传空数组报错", () => {
+		assert.throws(() => interpolateSQL("SELECT ?", []), /Too few parameters provided/);
+	});
+
+	test("escapeValue 空字符串正确转义", () => {
+		assert.equal(escapeValue(""), "''");
+	});
+
+	test("escapeValue 含换行和制表符的字符串", () => {
+		assert.equal(escapeValue("line1\nline2\tend"), "'line1\nline2\tend'");
+	});
+
+	test("escapeValue 含反斜杠的字符串", () => {
+		assert.equal(escapeValue("path\\to\\file"), "'path\\to\\file'");
+	});
+
+	test("escapeValue unicode 字符串", () => {
+		assert.equal(escapeValue("hello 世界"), "'hello 世界'");
 	});
 });

@@ -30,4 +30,15 @@ describe("generateToken", () => {
 		assert.ok(parts[0].length > 0);
 		assert.ok(parts[1].length > 0);
 	});
+
+	test("大量生成 token 无重复", () => {
+		const tokens = new Set();
+		const count = 1000;
+		for (let i = 0; i < count; i++) {
+			const token = generateToken();
+			assert.equal(tokens.has(token), false, `第 ${i + 1} 个 token 重复: ${token}`);
+			tokens.add(token);
+		}
+		assert.equal(tokens.size, count);
+	});
 });

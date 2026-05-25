@@ -65,4 +65,35 @@ describe("isSentinelRow", () => {
 	test("元素不含 TOKEN_COLUMN 时返回 false", () => {
 		assert.equal(isSentinelRow([{ id: 1 }], "abc"), false);
 	});
+
+	test("buildPayload 保留多行 SQL", () => {
+		const sql = "SELECT 1;\nSELECT 2;";
+		const payload = buildPayload(sql, "t1");
+		assert.ok(payload.includes("SELECT 1;"));
+		assert.ok(payload.includes("SELECT 2;"));
+	});
+
+	test("buildPayload SQL 中的单引号不被 sentinel 影响", () => {
+		const sql = "SELECT 'hello''world'";
+		const payload = buildPayload(sql, "t2");
+		assert.ok(payload.includes("SELECT 'hello''world';"));
+	});
+
+	test("buildPayload 规范化去除了多余的空白", () => {
+		const payload = buildPayload("\n  SELECT   1  \n  ", "t3");
+		assert.ok(payload.startsWith("SELECT 1;"));
+	});
+
+	test("isSentinelRow 空对象不匹配", () => {
+		assert.equal(isSentinelRow([{}], "abc"), false);
+	});
+
+	test("isSentinelRow 空数组元素不匹配", () => {
+		assert.equal(isSentinelRow([[]], "abc"), false);
+	});
+
+	test("isSentinelRow 基本类型数组不匹配", () => {
+		assert.equal(isSentinelRow(["abc"], "abc"), false);
+		assert.equal(isSentinelRow([123], "abc"), false);
+	});
 });
