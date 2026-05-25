@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 
-import { Queue } from "../src/queue.js";
+import { Queue } from "../src/core/queue.js";
 
 const PURE_QUEUE_COUNT = 500000;
 const MIXED_OPERATION_PAIRS = 250000;

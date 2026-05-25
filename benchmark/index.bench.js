@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
 
-import { SQLiteWrapper } from "../src/index.js";
+import { SQLiteExecutor } from "../src/index.js";
 import downloadSQLite3 from "../script/download-sqlite3.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -216,66 +216,66 @@ async function main() {
 
 	// Benchmark 1: Table creation
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
 		let counter = 0;
 		results.push(
 			await benchmark(
 				"Table Creation",
 				async () => {
-					await sqlite.exec(`CREATE TABLE IF NOT EXISTS test_table_${counter++} (id INTEGER PRIMARY KEY, name TEXT)`);
+					await sqlite.execute(`CREATE TABLE IF NOT EXISTS test_table_${counter++} (id INTEGER PRIMARY KEY, name TEXT)`);
 				},
 				50,
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 2: Single insert
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, age INTEGER)");
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, age INTEGER)");
 		results.push(
 			await benchmark(
 				"Single Row Insert",
 				async () => {
-					await sqlite.exec("INSERT INTO users (name, age) VALUES (?, ?)", ["John Doe", 30]);
+					await sqlite.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["John Doe", 30]);
 				},
 				1000,
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 3: Bulk insert (with transaction)
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("CREATE TABLE IF NOT EXISTS bulk_test (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)");
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS bulk_test (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)");
 		results.push(
 			await benchmark(
 				"Bulk Insert (100 rows with transaction)",
 				async () => {
-					await sqlite.exec("BEGIN TRANSACTION");
+					await sqlite.execute("BEGIN TRANSACTION");
 					for (let i = 0; i < 100; i++) {
-						await sqlite.exec("INSERT INTO bulk_test (value) VALUES (?)", [`value_${i}`]);
+						await sqlite.execute("INSERT INTO bulk_test (value) VALUES (?)", [`value_${i}`]);
 					}
-					await sqlite.exec("COMMIT");
+					await sqlite.execute("COMMIT");
 				},
 				10,
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 4: Simple SELECT query
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL)");
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL)");
 		// Insert test data with transaction for efficiency
-		await sqlite.exec("BEGIN TRANSACTION");
+		await sqlite.execute("BEGIN TRANSACTION");
 		for (let i = 0; i < PRODUCT_COUNT; i++) {
-			await sqlite.exec("INSERT INTO products (name, price) VALUES (?, ?)", [`Product ${i}`, Math.random() * 100]);
+			await sqlite.execute("INSERT INTO products (name, price) VALUES (?, ?)", [`Product ${i}`, Math.random() * 100]);
 		}
-		await sqlite.exec("COMMIT");
+		await sqlite.execute("COMMIT");
 		results.push(
 			await benchmark(
 				`Simple SELECT (${PRODUCT_COUNT} rows)`,
@@ -285,12 +285,12 @@ async function main() {
 				100,
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 5: SELECT with WHERE clause
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
 		results.push(
 			await benchmark(
 				"SELECT with WHERE clause",
@@ -300,79 +300,79 @@ async function main() {
 				100,
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 6: UPDATE operation
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
 		results.push(
 			await benchmark(
 				"UPDATE Single Row",
 				async () => {
 					const id = Math.floor(Math.random() * PRODUCT_COUNT) + 1;
-					await sqlite.exec("UPDATE products SET price = ? WHERE id = ?", [99.99, id]);
+					await sqlite.execute("UPDATE products SET price = ? WHERE id = ?", [99.99, id]);
 				},
 				500,
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 7: DELETE operation
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("CREATE TABLE IF NOT EXISTS temp_data (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT)");
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS temp_data (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT)");
 		// Pre-populate with data using transaction
-		await sqlite.exec("BEGIN TRANSACTION");
+		await sqlite.execute("BEGIN TRANSACTION");
 		for (let i = 0; i < TEMP_DATA_COUNT; i++) {
-			await sqlite.exec("INSERT INTO temp_data (data) VALUES (?)", [`data_${i}`]);
+			await sqlite.execute("INSERT INTO temp_data (data) VALUES (?)", [`data_${i}`]);
 		}
-		await sqlite.exec("COMMIT");
+		await sqlite.execute("COMMIT");
 		let deleteId = 1;
 		results.push(
 			await benchmark(
 				"DELETE Single Row",
 				async () => {
-					await sqlite.exec("DELETE FROM temp_data WHERE id = ?", [deleteId++]);
+					await sqlite.execute("DELETE FROM temp_data WHERE id = ?", [deleteId++]);
 				},
 				500,
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 8: Complex JOIN query
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec(`
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute(`
 			CREATE TABLE IF NOT EXISTS orders (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				user_id INTEGER,
 				total REAL
 			)
 		`);
-		await sqlite.exec(`
+		await sqlite.execute(`
 			CREATE TABLE IF NOT EXISTS customers (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				name TEXT
 			)
 		`);
 		// Insert test data with transactions for efficiency
-		await sqlite.exec("BEGIN TRANSACTION");
+		await sqlite.execute("BEGIN TRANSACTION");
 		for (let i = 0; i < CUSTOMER_COUNT; i++) {
-			await sqlite.exec("INSERT INTO customers (name) VALUES (?)", [`Customer ${i}`]);
+			await sqlite.execute("INSERT INTO customers (name) VALUES (?)", [`Customer ${i}`]);
 		}
-		await sqlite.exec("COMMIT");
+		await sqlite.execute("COMMIT");
 
-		await sqlite.exec("BEGIN TRANSACTION");
+		await sqlite.execute("BEGIN TRANSACTION");
 		for (let i = 0; i < ORDER_COUNT; i++) {
-			await sqlite.exec("INSERT INTO orders (user_id, total) VALUES (?, ?)", [
+			await sqlite.execute("INSERT INTO orders (user_id, total) VALUES (?, ?)", [
 				Math.floor(Math.random() * CUSTOMER_COUNT) + 1,
 				Math.random() * 1000,
 			]);
 		}
-		await sqlite.exec("COMMIT");
+		await sqlite.execute("COMMIT");
 
 		results.push(
 			await benchmark(
@@ -383,36 +383,36 @@ async function main() {
 				50,
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 9: Transaction with multiple operations
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL)");
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL)");
 		results.push(
 			await benchmark(
 				"Transaction (5 inserts)",
 				async () => {
-					await sqlite.exec("BEGIN TRANSACTION");
+					await sqlite.execute("BEGIN TRANSACTION");
 					for (let i = 0; i < 5; i++) {
-						await sqlite.exec("INSERT INTO transactions (amount) VALUES (?)", [Math.random() * 100]);
+						await sqlite.execute("INSERT INTO transactions (amount) VALUES (?)", [Math.random() * 100]);
 					}
-					await sqlite.exec("COMMIT");
+					await sqlite.execute("COMMIT");
 				},
 				100,
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 10: 100k-row table (query + update performance)
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
 		console.log(`Preparing 100k-row benchmark table (${LARGE_TABLE_ROW_COUNT} rows)...`);
 
-		await sqlite.exec("DROP TABLE IF EXISTS large_bench");
-		await sqlite.exec(`
+		await sqlite.execute("DROP TABLE IF EXISTS large_bench");
+		await sqlite.execute(`
 			CREATE TABLE large_bench (
 				id INTEGER PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -423,7 +423,7 @@ async function main() {
 		`);
 
 		// Use recursive CTE to seed 100k rows in one statement to keep setup time manageable.
-		await sqlite.exec(`
+		await sqlite.execute(`
 			WITH RECURSIVE seq(n) AS (
 				SELECT 1
 				UNION ALL
@@ -439,8 +439,8 @@ async function main() {
 			FROM seq
 		`);
 
-		await sqlite.exec("CREATE INDEX IF NOT EXISTS idx_large_bench_category ON large_bench(category)");
-		await sqlite.exec("CREATE INDEX IF NOT EXISTS idx_large_bench_score ON large_bench(score)");
+		await sqlite.execute("CREATE INDEX IF NOT EXISTS idx_large_bench_category ON large_bench(category)");
+		await sqlite.execute("CREATE INDEX IF NOT EXISTS idx_large_bench_score ON large_bench(score)");
 
 		let queryId = 1;
 		results.push(
@@ -482,7 +482,7 @@ async function main() {
 			await benchmark(
 				`100k Single Row Update (${LARGE_TABLE_ROW_COUNT} rows)`,
 				async () => {
-					await sqlite.exec("UPDATE large_bench SET score = ?, updated_at = datetime('now') WHERE id = ?", [999, updateId]);
+					await sqlite.execute("UPDATE large_bench SET score = ?, updated_at = datetime('now') WHERE id = ?", [999, updateId]);
 					updateId++;
 					if (updateId > LARGE_TABLE_ROW_COUNT) updateId = 1;
 				},
@@ -497,39 +497,39 @@ async function main() {
 				async () => {
 					const minId = (updateOffset % (LARGE_TABLE_ROW_COUNT - 100)) + 1;
 					const maxId = minId + 99;
-					await sqlite.exec("BEGIN TRANSACTION");
-					await sqlite.exec("UPDATE large_bench SET score = score + 1, updated_at = datetime('now') WHERE id BETWEEN ? AND ?", [
+					await sqlite.execute("BEGIN TRANSACTION");
+					await sqlite.execute("UPDATE large_bench SET score = score + 1, updated_at = datetime('now') WHERE id BETWEEN ? AND ?", [
 						minId,
 						maxId,
 					]);
-					await sqlite.exec("COMMIT");
+					await sqlite.execute("COMMIT");
 					updateOffset += 100;
 				},
 				100,
 			),
 		);
 
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 11: digest 100k simple commands end-to-end
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
 		results.push(
 			await benchmarkWorkload(`100k Simple Commands (SELECT 1)`, SIMPLE_COMMAND_COUNT, async () => {
 				for (let i = 0; i < SIMPLE_COMMAND_COUNT; i++) {
-					await sqlite.exec("SELECT 1");
+					await sqlite.execute("SELECT 1");
 				}
 			}),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 12: digest 100k inserts end-to-end
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("DROP TABLE IF EXISTS insert_100k_bench");
-		await sqlite.exec(`
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("DROP TABLE IF EXISTS insert_100k_bench");
+		await sqlite.execute(`
 			CREATE TABLE insert_100k_bench (
 				id INTEGER PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -540,18 +540,18 @@ async function main() {
 		results.push(
 			await benchmarkWorkload(`100k Sequential INSERT`, SIMPLE_COMMAND_COUNT, async () => {
 				for (let i = 1; i <= SIMPLE_COMMAND_COUNT; i++) {
-					await sqlite.exec("INSERT INTO insert_100k_bench (id, name, score) VALUES (?, ?, ?)", [i, `User ${i}`, i % 1000]);
+					await sqlite.execute("INSERT INTO insert_100k_bench (id, name, score) VALUES (?, ?, ?)", [i, `User ${i}`, i % 1000]);
 				}
 			}),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 13: digest 100k updates end-to-end
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("DROP TABLE IF EXISTS update_100k_bench");
-		await sqlite.exec(`
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("DROP TABLE IF EXISTS update_100k_bench");
+		await sqlite.execute(`
 			CREATE TABLE update_100k_bench (
 				id INTEGER PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -560,7 +560,7 @@ async function main() {
 			)
 		`);
 
-		await sqlite.exec(`
+		await sqlite.execute(`
 			WITH RECURSIVE seq(n) AS (
 				SELECT 1
 				UNION ALL
@@ -578,18 +578,18 @@ async function main() {
 		results.push(
 			await benchmarkWorkload(`100k Sequential UPDATE`, SIMPLE_COMMAND_COUNT, async () => {
 				for (let i = 1; i <= SIMPLE_COMMAND_COUNT; i++) {
-					await sqlite.exec("UPDATE update_100k_bench SET score = ?, updated_at = datetime('now') WHERE id = ?", [(i + 1) % 1000, i]);
+					await sqlite.execute("UPDATE update_100k_bench SET score = ?, updated_at = datetime('now') WHERE id = ?", [(i + 1) % 1000, i]);
 				}
 			}),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 14: burst enqueue tens-of-thousands inserts end-to-end
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("DROP TABLE IF EXISTS burst_enqueued_insert_bench");
-		await sqlite.exec(`
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("DROP TABLE IF EXISTS burst_enqueued_insert_bench");
+		await sqlite.execute(`
 			CREATE TABLE burst_enqueued_insert_bench (
 				id INTEGER PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -599,27 +599,27 @@ async function main() {
 
 		results.push(
 			await benchmarkWorkload(`20k Burst Enqueue INSERT (Promise.all)`, BURST_INSERT_COUNT, async () => {
-				await sqlite.exec("BEGIN TRANSACTION");
+				await sqlite.execute("BEGIN TRANSACTION");
 
 				const jobs = [];
 				for (let i = 1; i <= BURST_INSERT_COUNT; i++) {
 					jobs.push(
-						sqlite.exec("INSERT INTO burst_enqueued_insert_bench (id, name, score) VALUES (?, ?, ?)", [i, `User ${i}`, i % 1000]),
+						sqlite.execute("INSERT INTO burst_enqueued_insert_bench (id, name, score) VALUES (?, ?, ?)", [i, `User ${i}`, i % 1000]),
 					);
 				}
 
 				await Promise.all(jobs);
-				await sqlite.exec("COMMIT");
+				await sqlite.execute("COMMIT");
 			}),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 15: sequential enqueue tens-of-thousands inserts end-to-end
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("DROP TABLE IF EXISTS sequential_enqueued_insert_bench");
-		await sqlite.exec(`
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("DROP TABLE IF EXISTS sequential_enqueued_insert_bench");
+		await sqlite.execute(`
 			CREATE TABLE sequential_enqueued_insert_bench (
 				id INTEGER PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -629,27 +629,27 @@ async function main() {
 
 		results.push(
 			await benchmarkWorkload(`20k Sequential Enqueue INSERT (await loop)`, BURST_INSERT_COUNT, async () => {
-				await sqlite.exec("BEGIN TRANSACTION");
+				await sqlite.execute("BEGIN TRANSACTION");
 
 				for (let i = 1; i <= BURST_INSERT_COUNT; i++) {
-					await sqlite.exec("INSERT INTO sequential_enqueued_insert_bench (id, name, score) VALUES (?, ?, ?)", [
+					await sqlite.execute("INSERT INTO sequential_enqueued_insert_bench (id, name, score) VALUES (?, ?, ?)", [
 						i,
 						`User ${i}`,
 						i % 1000,
 					]);
 				}
 
-				await sqlite.exec("COMMIT");
+				await sqlite.execute("COMMIT");
 			}),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 16: chunked enqueue tens-of-thousands inserts end-to-end
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("DROP TABLE IF EXISTS chunked_enqueued_insert_bench");
-		await sqlite.exec(`
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("DROP TABLE IF EXISTS chunked_enqueued_insert_bench");
+		await sqlite.execute(`
 			CREATE TABLE chunked_enqueued_insert_bench (
 				id INTEGER PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -662,7 +662,7 @@ async function main() {
 				`20k Chunked Enqueue INSERT (${CHUNKED_ENQUEUE_SIZE}/chunk)` ,
 				BURST_INSERT_COUNT,
 				async () => {
-					await sqlite.exec("BEGIN TRANSACTION");
+					await sqlite.execute("BEGIN TRANSACTION");
 
 					for (let start = 1; start <= BURST_INSERT_COUNT; start += CHUNKED_ENQUEUE_SIZE) {
 						const end = Math.min(start + CHUNKED_ENQUEUE_SIZE - 1, BURST_INSERT_COUNT);
@@ -670,7 +670,7 @@ async function main() {
 
 						for (let i = start; i <= end; i++) {
 							jobs.push(
-								sqlite.exec("INSERT INTO chunked_enqueued_insert_bench (id, name, score) VALUES (?, ?, ?)", [
+								sqlite.execute("INSERT INTO chunked_enqueued_insert_bench (id, name, score) VALUES (?, ?, ?)", [
 									i,
 									`User ${i}`,
 									i % 1000,
@@ -681,18 +681,18 @@ async function main() {
 						await Promise.all(jobs);
 					}
 
-					await sqlite.exec("COMMIT");
+					await sqlite.execute("COMMIT");
 				},
 			),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Benchmark 17: burst enqueue tens-of-thousands updates end-to-end
 	{
-		const sqlite = new SQLiteWrapper(sqlite3Path, { dbPath });
-		await sqlite.exec("DROP TABLE IF EXISTS burst_enqueued_update_bench");
-		await sqlite.exec(`
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath });
+		await sqlite.execute("DROP TABLE IF EXISTS burst_enqueued_update_bench");
+		await sqlite.execute(`
 			CREATE TABLE burst_enqueued_update_bench (
 				id INTEGER PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -701,7 +701,7 @@ async function main() {
 			)
 		`);
 
-		await sqlite.exec(`
+		await sqlite.execute(`
 			WITH RECURSIVE seq(n) AS (
 				SELECT 1
 				UNION ALL
@@ -714,12 +714,12 @@ async function main() {
 
 		results.push(
 			await benchmarkWorkload(`20k Burst Enqueue UPDATE (Promise.all)`, BURST_INSERT_COUNT, async () => {
-				await sqlite.exec("BEGIN TRANSACTION");
+				await sqlite.execute("BEGIN TRANSACTION");
 
 				const jobs = [];
 				for (let i = 1; i <= BURST_INSERT_COUNT; i++) {
 					jobs.push(
-						sqlite.exec(
+						sqlite.execute(
 							"UPDATE burst_enqueued_update_bench SET score = ?, updated_at = datetime('now') WHERE id = ?",
 							[(i + 7) % 1000, i],
 						),
@@ -727,10 +727,10 @@ async function main() {
 				}
 
 				await Promise.all(jobs);
-				await sqlite.exec("COMMIT");
+				await sqlite.execute("COMMIT");
 			}),
 		);
-		sqlite.close();
+		await sqlite.close();
 	}
 
 	// Display results
