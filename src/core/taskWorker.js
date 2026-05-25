@@ -168,6 +168,11 @@ export class TaskWorker {
 			return;
 		}
 
+		if (!Array.isArray(parsed) && parsed?.error) {
+			task.consumerError = new Error(String(parsed.error));
+			return;
+		}
+
 		if (task.kind === "query" && Array.isArray(parsed)) {
 			task.rows.push(...parsed);
 			return;
