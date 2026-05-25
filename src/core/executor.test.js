@@ -340,6 +340,55 @@ describe("SQLiteExecutor", () => {
 		assert.throws(() => sqlite.stream("SELECT 1", "not-an-array"), /params must be an array/);
 	});
 
+	test("管线化：批量入队后结果顺序正确", async () => {
+		const promises = [];
+		for (let i = 0; i < 20; i++) {
+			promises.push(sqlite.query(`SELECT ${i} AS v, '${i * 2}' AS w`));
+		}
+
+		const results = await Promise.all(promises);
+		assert.equal(results.length, 20);
+		for (let i = 0; i < 20; i++) {
+			assert.equal(results[i][0].v, i);
+			assert.equal(results[i][0].w, String(i * 2));
+		}
+	});
+
+	test("管线化：在写入中途追加新任务", async () => {
+		const promises = [];
+		for (let i = 0; i < 5; i++) {
+			promises.push(sqlite.query(`SELECT ${i} AS v`));
+		}
+
+		await promises[0];
+
+		for (let i = 5; i < 10; i++) {
+			promises.push(sqlite.query(`SELECT ${i} AS v`));
+		}
+
+		const results = await Promise.all(promises);
+		assert.equal(results.length, 10);
+		for (let i = 0; i < 10; i++) {
+			assert.equal(results[i][0].v, i);
+		}
+	});
+
+	test("管线化：execute 批量并发不丢失", async () => {
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS pipe_exec (id INTEGER PRIMARY KEY, val TEXT)");
+		const promises = [];
+		for (let i = 0; i < 100; i++) {
+			promises.push(sqlite.execute("INSERT INTO pipe_exec (val) VALUES (?)", [`n${i}`]));
+		}
+		await Promise.all(promises);
+
+		const rows = await sqlite.query("SELECT val FROM pipe_exec");
+		assert.equal(rows.length, 100);
+		assert.deepEqual(
+			rows.map((r) => r.val),
+			new Array(100).fill(0).map((_, i) => `n${i}`),
+		);
+	});
+
 	test("读写分离: 文件 DB 创建 reader pool", () => {
 		const dbFile = path.join(os.tmpdir(), `rw-pool-${Date.now()}.db`);
 		const sqlite2 = new SQLiteExecutor({
