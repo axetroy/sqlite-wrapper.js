@@ -15,10 +15,11 @@ export { createRowStreamParser };
  * 此时行解析器可能错误地消费 sentinel 数组（而非数据数组）。
  * 回调中检测 sentinel 行并回喂给 valueParser 以确保 sentinel 被识别。
  *
- * @param {{ kind: string, onRow?: Function, consumerError?: Error | null, valueParser?: { feed: Function }, token?: string }} task
+ * @param {{ kind: string, onRow?: Function, consumerError?: Error | null, token?: string }} task
+ * @param {{ feed: Function }} valueParser - 共享 JSON 值解析器，用于回喂 sentinel 行
  * @returns {ReturnType<typeof createRowStreamParser> | null}
  */
-export function setupStreamParser(task) {
+export function setupStreamParser(task, valueParser = { feed() {} }) {
 	if (task.kind !== "stream") return null;
 	const parser = createRowStreamParser((rawRow) => {
 		if (task.consumerError) return;
@@ -27,7 +28,7 @@ export function setupStreamParser(task) {
 			// sqlite3 空结果不输出 []，导致 sentinel 被行解析器消费。
 			// 若该行包含 TOKEN_COLUMN，回喂给 valueParser 做正式 sentinel 检测。
 			if (typeof row === "object" && row !== null && TOKEN_COLUMN in row) {
-				task.valueParser?.feed(`[${rawRow}]`);
+				valueParser.feed(`[${rawRow}]`);
 				return;
 			}
 			task.onRow(row);

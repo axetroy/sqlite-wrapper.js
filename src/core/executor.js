@@ -354,16 +354,13 @@ export class SQLiteExecutor {
 				reject,
 				consumerError: null,
 				stderrText: "",
-				errorScheduled: false,
 				timer: null,
 				startTime: 0,
 				rowParser: null,
-				valueParser: null,
 			};
 
 			if (kind === "stream") {
-				task.rowParser = setupStreamParser(task);
-				task.valueParser = this.#sharedValueParser;
+				task.rowParser = setupStreamParser(task, this.#sharedValueParser);
 			}
 
 			if (this.#activeScopeId && this.#activeScopeId !== scopeId) {
