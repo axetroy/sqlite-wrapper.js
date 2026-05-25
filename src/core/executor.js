@@ -10,7 +10,7 @@ import { buildPayload } from "./protocol.js";
 import { generateToken } from "../utils/token.js";
 import { createTimeoutError } from "../utils/timeout.js";
 import { setupStreamParser, AsyncRowBuffer } from "../stream/queryStream.js";
-import { interpolateSQL } from "../utils.js";
+import { interpolateSQL, normalizeSQL } from "../utils.js";
 import { classifySQL } from "./classifier.js";
 import { ReaderPool } from "./readerPool.js";
 import { Metrics } from "./metrics.js";
@@ -293,25 +293,38 @@ export class SQLiteExecutor {
 		if (this.#fatalError) return Promise.reject(this.#fatalError);
 		if (!Array.isArray(params)) return Promise.reject(new TypeError("params must be an array"));
 
-		const formatted = params.length === 0 && !sql.includes("?") ? sql : interpolateSQL(sql, params);
 		const timeout = options?.timeout ?? this.#statementTimeout;
 		const token = generateToken();
 		const onRow = options?.onRow ?? null;
 
+		// Normalize the TEMPLATE first so:
+		//   - normalizeSQL cache key = original SQL (template, not interpolated)
+		//   - classifySQL also uses a cacheable key (normalized template with ? preserved)
+		//   - buildPayload can skip the second normalizeSQL scan
+		const normalized = normalizeSQL(sql);
+
+		let formatted;
+		let sqlNormalized = true;
+		if (params.length === 0 && !normalized.includes("?")) {
+			formatted = normalized;
+		} else {
+			formatted = interpolateSQL(normalized, params);
+		}
+
 		if (scopeId) {
-			return this.#enqueueWriter(kind, formatted, timeout, token, onRow, scopeId);
+			return this.#enqueueWriter(kind, formatted, timeout, token, onRow, scopeId, sqlNormalized);
 		}
 
 		if (this.#readerPool) {
 			if (kind === "stream" || kind === "query") {
 				return this.#enqueueReader(kind, formatted, timeout, token, onRow);
 			}
-			if (kind === "execute" && classifySQL(formatted) === "read") {
+			if (kind === "execute" && classifySQL(normalized) === "read") {
 				return this.#enqueueReader(kind, formatted, timeout, token, onRow);
 			}
 		}
 
-		return this.#enqueueWriter(kind, formatted, timeout, token, onRow, null);
+		return this.#enqueueWriter(kind, formatted, timeout, token, onRow, null, sqlNormalized);
 	}
 
 	/**
@@ -322,9 +335,10 @@ export class SQLiteExecutor {
 	 * @param {string} token
 	 * @param {Function | null} onRow
 	 * @param {symbol | null} scopeId
+	 * @param {boolean} [sqlNormalized=false]
 	 * @returns {Promise<any>}
 	 */
-	#enqueueWriter(kind, sql, timeout, token, onRow, scopeId) {
+	#enqueueWriter(kind, sql, timeout, token, onRow, scopeId, sqlNormalized = false) {
 		this.#metrics.incrementTasksTotal(kind);
 		return new Promise((resolve, reject) => {
 			const task = {
@@ -334,6 +348,7 @@ export class SQLiteExecutor {
 				token,
 				onRow,
 				scopeId,
+				sqlNormalized,
 				rows: [],
 				resolve,
 				reject,
@@ -404,7 +419,7 @@ export class SQLiteExecutor {
 		const now = performance.now();
 		let payload = "";
 		for (const task of batch) {
-			payload += buildPayload(task.sql, task.token);
+			payload += buildPayload(task.sql, task.token, { skipNormalize: task.sqlNormalized });
 			task.startTime = now;
 			task.timer = setTimeout(() => this.#handleTaskTimeout(task), task.timeout);
 		}

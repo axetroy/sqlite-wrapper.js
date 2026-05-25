@@ -7,12 +7,13 @@ export { TOKEN_COLUMN } from "../constants.js";
  * 构建发送给 sqlite3 进程的完整载荷。
  * 在原始 SQL 末尾追加一条 sentinel 查询，用于标记该任务输出的结束。
  *
- * @param {string} sql - 要执行的 SQL 语句
+ * @param {string} sql - 要执行的 SQL 语句（已规范化时设 skipNormalize=true）
  * @param {string} token - 唯一 sentinel token
+ * @param {{ skipNormalize?: boolean }} [options]
  * @returns {string} 追加了 sentinel 查询后的完整载荷
  */
-export function buildPayload(sql, token) {
-	const normalized = normalizeSQL(sql);
+export function buildPayload(sql, token, { skipNormalize = false } = {}) {
+	const normalized = skipNormalize ? sql : normalizeSQL(sql);
 	const suffix = normalized.endsWith(";") ? "" : ";";
 	return `${normalized}${suffix}\nSELECT '${token}' AS ${TOKEN_COLUMN};\n`;
 }
