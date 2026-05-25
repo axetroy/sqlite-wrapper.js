@@ -160,4 +160,71 @@ describe("TaskWorker", () => {
 	test("idle 在无任务时返回 true", () => {
 		assert.equal(worker.idle, true);
 	});
+
+	test("管线化：批量入队后结果顺序正确", async () => {
+		await new Promise((resolve, reject) => {
+			worker.enqueue({ kind: "execute", sql: "CREATE TABLE t_pipe (id INTEGER, val TEXT)", timeout: 10000, token: "tok-setup", onRow: null, resolve, reject });
+		});
+
+		const promises = [];
+		for (let i = 0; i < 20; i++) {
+			promises.push(new Promise((resolve, reject) => {
+				worker.enqueue({
+					kind: "query",
+					sql: `SELECT ${i} AS v, '${i * 2}' AS w`,
+					timeout: 10000,
+					token: `tok-pipe-${i}`,
+					onRow: null,
+					resolve,
+					reject,
+				});
+			}));
+		}
+
+		const results = await Promise.all(promises);
+		assert.equal(results.length, 20);
+		for (let i = 0; i < 20; i++) {
+			assert.equal(results[i][0].v, i);
+			assert.equal(results[i][0].w, String(i * 2));
+		}
+	});
+
+	test("管线化：在写入中途追加新任务", async () => {
+		const promises = [];
+		for (let i = 0; i < 5; i++) {
+			promises.push(new Promise((resolve, reject) => {
+				worker.enqueue({
+					kind: "query",
+					sql: `SELECT ${i} AS v`,
+					timeout: 10000,
+					token: `tok-append-${i}`,
+					onRow: null,
+					resolve,
+					reject,
+				});
+			}));
+		}
+
+		await promises[0];
+
+		for (let i = 5; i < 10; i++) {
+			promises.push(new Promise((resolve, reject) => {
+				worker.enqueue({
+					kind: "query",
+					sql: `SELECT ${i} AS v`,
+					timeout: 10000,
+					token: `tok-append-${i}`,
+					onRow: null,
+					resolve,
+					reject,
+				});
+			}));
+		}
+
+		const results = await Promise.all(promises);
+		assert.equal(results.length, 10);
+		for (let i = 0; i < 10; i++) {
+			assert.equal(results[i][0].v, i);
+		}
+	});
 });

@@ -1,9 +1,13 @@
 /**
- * 单个 sqlite3 子进程 Worker。
+ * 单个 sqlite3 进程 Worker，支持管线化（pipelining）。
  *
- * 维护一个内部任务队列，按 FIFO 顺序依次执行。
- * 每个任务对应一条 SQL 语句，结果通过 Promise 回调返回。
- * 支持超时控制和自动重启。
+ * 内部维护 pending 和 inflight 两个队列：
+ * - pending：等待写入 stdin 的任务
+ * - inflight：已写入 stdin、等待 stdout 返回的任务
+ *
+ * 当 pending 中有任务且 inflight 未满时，自动将多个任务的 SQL payload
+ * 合并为一次 stdin.write() 发送（管线化），由 sqlite3 顺序执行后，
+ * 在 stdout 解析时按 FIFO 顺序匹配 sentinel token 逐一完成。
  */
 export class TaskWorker {
 	/**
@@ -13,6 +17,7 @@ export class TaskWorker {
 	 * @param options.logger            日志记录器
 	 * @param options.name              Worker 名称，用于日志和调试
 	 * @param options.initMode          子进程初始化模式（参考 ProcessManager）
+	 * @param options.batchSize         管线化批量大小，默认 10
 	 */
 	constructor(options: {
 		binary: string;
@@ -21,23 +26,25 @@ export class TaskWorker {
 		logger?: import("./executor.js").Logger;
 		name?: string;
 		initMode?: "wal" | "none";
+		batchSize?: number;
 	});
 
 	/** Worker 名称 */
 	get name(): string;
 
-	/** 当前是否空闲（无排队任务且无运行中的任务） */
+	/** 当前是否空闲（无 pending 也无 inflight 任务） */
 	get idle(): boolean;
 
-	/** 当前排队等待的语句数量 */
+	/** 当前排队（pending + inflight）的语句数量 */
 	get pendingStatements(): number;
 
 	/**
-	 * 加入一个任务到队列。
-	 * @param config - 任务配置对象，包含 kind、sql、params、resolve、reject 等字段
+	 * 加入一个任务到待发送队列。
+	 * 内部会触发泵送逻辑，可能立即与队列中其他任务合批发送。
+	 * @param config - 任务配置对象，包含 kind、sql、timeout、token、resolve、reject、onRow 等
 	 */
 	enqueue(config: object): void;
 
-	/** 立即终止子进程，丢弃所有排队任务 */
+	/** 立即终止子进程，丢弃所有待处理和已发送的任务 */
 	kill(): void;
 }
