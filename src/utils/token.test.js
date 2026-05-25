@@ -20,15 +20,15 @@ describe("generateToken", () => {
 		assert.notEqual(t1, t2);
 	});
 
-	test("包含时间戳和随机部分", () => {
+	test("包含计数器和进程 PID", () => {
 		const token = generateToken();
 		assert.ok(token.startsWith("__executor_end__"));
-		const randomPart = token.slice("__executor_end__".length);
-		assert.ok(randomPart.length > 0);
-		const parts = randomPart.split("_");
-		assert.equal(parts.length, 2, "应包含时间戳和随机数两部分");
-		assert.ok(parts[0].length > 0);
-		assert.ok(parts[1].length > 0);
+		const suffix = token.slice("__executor_end__".length);
+		assert.ok(suffix.length > 0);
+		const parts = suffix.split("_");
+		assert.equal(parts.length, 2, "应包含计数器和 PID 两部分");
+		assert.ok(parts[0].length > 0, "计数器部分不为空");
+		assert.ok(parts[1].length > 0, "PID 部分不为空");
 	});
 
 	test("大量生成 token 无重复", () => {

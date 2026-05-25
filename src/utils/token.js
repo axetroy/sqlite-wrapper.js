@@ -1,8 +1,12 @@
+let _counter = 0;
+const _PREFIX = "__executor_end__";
+const _PID36 = process.pid.toString(36);
+
 /**
  * 生成一个唯一的 sentinel token。
- * 基于时间戳（36 进制）和随机数组合，用于标记 SQL 任务的输出边界。
+ * 使用递增计数器和进程 PID 组合，避免每次分配随机数字符串。
  * @returns {string}
  */
 export function generateToken() {
-	return `__executor_end__${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+	return `${_PREFIX}${(_counter++).toString(36)}_${_PID36}`;
 }
