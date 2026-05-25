@@ -9,13 +9,15 @@ export class ProcessManager {
 	#binary;
 	#database;
 	#proc = null;
+	#initMode;
 
 	/**
-	 * @param {{ binary?: string, database?: string }} options
+	 * @param {{ binary?: string, database?: string, initMode?: "wal" | "none" }} options
 	 */
-	constructor({ binary, database } = {}) {
+	constructor({ binary, database, initMode = "wal" } = {}) {
 		this.#binary = which(binary) ?? binary;
 		this.#database = database;
+		this.#initMode = initMode;
 	}
 
 	get binary() {
@@ -28,14 +30,16 @@ export class ProcessManager {
 
 	/**
 	 * 启动 sqlite3 子进程。
-	 * 使用 `-json` 模式启动，并为数据库文件启用 WAL 模式。
+	 * 使用 `-json` 模式启动。
+	 * 对于文件数据库，initMode="wal" 时自动启用 WAL 模式 + busy_timeout。
 	 * @returns {import("node:child_process").ChildProcess}
 	 */
 	start() {
 		const args = ["-json"];
 		if (this.#database) args.push(this.#database);
-		if (this.#database && this.#database !== ":memory:") {
+		if (this.#database && this.#database !== ":memory:" && this.#initMode === "wal") {
 			args.push("-cmd", "PRAGMA journal_mode=WAL;");
+			args.push("-cmd", "PRAGMA busy_timeout=5000;");
 		}
 
 		const proc = spawn(this.#binary, args, {

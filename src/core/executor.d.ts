@@ -12,6 +12,7 @@ export interface SQLiteExecutorOptions {
 	logger?: Logger;
 	statementTimeout?: number;
 	autoRestart?: boolean;
+	poolSize?: number;
 }
 
 export interface StatementOptions {
@@ -32,6 +33,7 @@ export interface TransactionHandle {
 export declare class SQLiteExecutor implements AsyncDisposable, Disposable {
 	constructor(options?: SQLiteExecutorOptions);
 	get pendingStatements(): number;
+	get readerPool(): import("./readerPool.js").ReaderPool | null;
 	execute(sql: string, params?: any[], options?: StatementOptions): Promise<void>;
 	query<T = any>(sql: string, params?: any[], options?: StatementOptions): Promise<T[]>;
 	queryStream<T = any>(sql: string, onRow: (row: T) => void, params?: any[], options?: StatementOptions): Promise<void>;

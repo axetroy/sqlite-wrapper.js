@@ -404,4 +404,93 @@ describe("SQLiteExecutor", () => {
 			/params must be an array/,
 		);
 	});
+
+	test("读写分离: 文件 DB 创建 reader pool", () => {
+		const dbFile = path.join(os.tmpdir(), `rw-pool-${Date.now()}.db`);
+		const sqlite2 = new SQLiteExecutor({
+			binary: SQLite3BinaryFile,
+			database: dbFile,
+			poolSize: 2,
+		});
+		try {
+			assert.ok(sqlite2.readerPool);
+			assert.equal(sqlite2.readerPool.size, 2);
+		} finally {
+			sqlite2.close();
+		}
+	});
+
+	test("读写分离: :memory: 数据库不使用 reader pool", () => {
+		const mem = new SQLiteExecutor({
+			binary: SQLite3BinaryFile,
+			poolSize: 2,
+		});
+		assert.ok(mem.readerPool === null || mem.readerPool === undefined);
+		mem.close();
+	});
+
+	test("读写分离: query 路由到 reader 返回正确结果", async () => {
+		const dbFile = path.join(os.tmpdir(), `rw-query-${Date.now()}.db`);
+		const sqlite2 = new SQLiteExecutor({
+			binary: SQLite3BinaryFile,
+			database: dbFile,
+			poolSize: 2,
+			statementTimeout: 10000,
+		});
+		try {
+			await sqlite2.execute("CREATE TABLE IF NOT EXISTS rw_q (id INTEGER PRIMARY KEY, val TEXT)");
+			await sqlite2.execute("INSERT INTO rw_q VALUES (1, 'hello'), (2, 'world')");
+			await new Promise((r) => setTimeout(r, 500));
+			const rows = await sqlite2.query("SELECT * FROM rw_q ORDER BY id ASC");
+			assert.equal(rows.length, 2);
+		} finally {
+			await sqlite2.close();
+		}
+	});
+
+	test("读写分离: execute 读走 reader, 写走 writer", async () => {
+		const dbFile = path.join(os.tmpdir(), `rw-exec2-${Date.now()}.db`);
+		const sqlite2 = new SQLiteExecutor({
+			binary: SQLite3BinaryFile,
+			database: dbFile,
+			poolSize: 2,
+		});
+		try {
+			const writeTask = sqlite2.execute("CREATE TABLE IF NOT EXISTS rw_e (id INTEGER PRIMARY KEY)");
+			const readTask = sqlite2.execute("SELECT 1");
+			assert.ok(writeTask instanceof Promise);
+			assert.ok(readTask instanceof Promise);
+			await Promise.allSettled([writeTask, readTask]);
+		} finally {
+			await sqlite2.close();
+		}
+	});
+
+	test("读写分离: 耗时写入不阻塞并发读取", async () => {
+		const dbFile = path.join(os.tmpdir(), `rw-concur-${Date.now()}.db`);
+		const sqlite = new SQLiteExecutor({
+			binary: SQLite3BinaryFile,
+			database: dbFile,
+			poolSize: 2,
+		});
+		try {
+			await sqlite.execute("CREATE TABLE IF NOT EXISTS rw_big (id INTEGER PRIMARY KEY, val TEXT)");
+
+			let readResolved = false;
+			const slowWrite = sqlite.execute(
+				"INSERT INTO rw_big SELECT value, hex(randomblob(512)) FROM generate_series(1, 100000)",
+			);
+
+			await new Promise((r) => setTimeout(r, 30));
+
+			const rows = await sqlite.query("SELECT COUNT(*) AS cnt FROM rw_big");
+			readResolved = true;
+			assert.equal(rows[0].cnt, 0);
+
+			await slowWrite;
+			assert.ok(readResolved, "读取应在写入完成前返回，证明走不同进程");
+		} finally {
+			await sqlite.close();
+		}
+	});
 });

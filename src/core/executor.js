@@ -11,6 +11,8 @@ import { generateToken } from "../utils/token.js";
 import { createTimeoutError } from "../utils/timeout.js";
 import { setupStreamParser, AsyncRowBuffer } from "../stream/queryStream.js";
 import { interpolateSQL } from "../utils.js";
+import { classifySQL } from "./classifier.js";
+import { ReaderPool } from "./readerPool.js";
 
 /**
  * SQLite 执行器。
@@ -31,6 +33,10 @@ export class SQLiteExecutor {
 	#autoRestart;
 	#fatalError = null;
 	#processManager;
+	#readerPool = null;
+	#poolSize;
+	#binary;
+	#database;
 
 	/**
 	 * @param {{
@@ -39,19 +45,39 @@ export class SQLiteExecutor {
 	 *   logger?: import("../index.js").Logger,
 	 *   statementTimeout?: number,
 	 *   autoRestart?: boolean,
+	 *   poolSize?: number,
 	 * }} options
 	 */
-	constructor({ binary = "sqlite3", database = ":memory:", logger, statementTimeout = DEFAULT_STATEMENT_TIMEOUT, autoRestart = true } = {}) {
+	constructor({ binary = "sqlite3", database = ":memory:", logger, statementTimeout = DEFAULT_STATEMENT_TIMEOUT, autoRestart = true, poolSize = 0 } = {}) {
 		this.#logger = logger;
 		this.#statementTimeout = this.#normalizeTimeout(statementTimeout);
 		this.#autoRestart = autoRestart !== false;
+		this.#binary = binary;
+		this.#database = database;
+		this.#poolSize = poolSize;
+
 		this.#processManager = new ProcessManager({ binary, database });
 		this.#startProcess();
+
+		if (poolSize > 0 && database !== ":memory:") {
+			this.#readerPool = new ReaderPool({
+				binary,
+				database,
+				poolSize,
+				statementTimeout,
+				logger,
+			});
+		}
 	}
 
-	/** 当前待处理的任务总数（队列中 + 执行中） */
+	/** 当前待处理的任务总数（队列中 + 执行中 + reader 队列中） */
 	get pendingStatements() {
-		return this.queue.size + this.#deferredQueue.size + (this.#currentTask ? 1 : 0);
+		return this.queue.size + this.#deferredQueue.size + (this.#currentTask ? 1 : 0) + (this.#readerPool?.pendingStatements ?? 0);
+	}
+
+	/** 读取器连接池（null 表示未启用读写分离）。 */
+	get readerPool() {
+		return this.#readerPool;
 	}
 
 	/**
@@ -192,6 +218,8 @@ export class SQLiteExecutor {
 		this.#closed = true;
 		this.#rejectQueues(new Error("SQLiteExecutor is closed"));
 
+		this.#readerPool?.kill();
+
 		this.#processManager.kill();
 		try {
 			await once(this.#processManager.process, "close");
@@ -248,8 +276,7 @@ export class SQLiteExecutor {
 	}
 
 	/**
-	 * 创建一个任务并加入队列。
-	 * 如果当前处于事务域中且任务不属于该事务，则放入延迟队列。
+	 * 决定任务应该由 writer 还是 reader 执行，并分发。
 	 * @param {"execute" | "query" | "stream"} kind
 	 * @param {string} sql
 	 * @param {any[]} params
@@ -264,18 +291,49 @@ export class SQLiteExecutor {
 
 		const formatted = params.length === 0 && !sql.includes("?") ? sql : interpolateSQL(sql, params);
 		const timeout = options?.timeout ?? this.#statementTimeout;
+		const token = generateToken();
+		const onRow = options?.onRow ?? null;
 
+		// 事务内的任务始终走 writer
+		if (scopeId) {
+			return this.#enqueueWriter(kind, formatted, timeout, token, onRow, scopeId);
+		}
+
+		// 判断是否可以使用 reader
+		if (this.#readerPool) {
+			if (kind === "stream" || kind === "query") {
+				return this.#enqueueReader(kind, formatted, timeout, token, onRow);
+			}
+			if (kind === "execute" && classifySQL(formatted) === "read") {
+				return this.#enqueueReader(kind, formatted, timeout, token, onRow);
+			}
+		}
+
+		return this.#enqueueWriter(kind, formatted, timeout, token, onRow, null);
+	}
+
+	/**
+	 * 创建任务发送到 writer 队列。
+	 * @param {"execute" | "query" | "stream"} kind
+	 * @param {string} sql
+	 * @param {number} timeout
+	 * @param {string} token
+	 * @param {Function | null} onRow
+	 * @param {symbol | null} scopeId
+	 * @returns {Promise<any>}
+	 */
+	#enqueueWriter(kind, sql, timeout, token, onRow, scopeId) {
 		return new Promise((resolve, reject) => {
 			const task = {
 				kind,
-				sql: formatted,
-				scopeId,
+				sql,
 				timeout,
-				token: generateToken(),
+				token,
+				onRow,
+				scopeId,
 				rows: [],
 				resolve,
 				reject,
-				onRow: options?.onRow ?? null,
 				consumerError: null,
 				stderrText: "",
 				errorScheduled: false,
@@ -297,6 +355,29 @@ export class SQLiteExecutor {
 			}
 
 			this.#pumpQueue();
+		});
+	}
+
+	/**
+	 * 创建任务发送到 reader 池。
+	 * @param {"execute" | "query" | "stream"} kind
+	 * @param {string} sql
+	 * @param {number} timeout
+	 * @param {string} token
+	 * @param {Function | null} onRow
+	 * @returns {Promise<any>}
+	 */
+	#enqueueReader(kind, sql, timeout, token, onRow) {
+		return new Promise((resolve, reject) => {
+			this.#readerPool.enqueue({
+				kind,
+				sql,
+				timeout,
+				token,
+				onRow,
+				resolve,
+				reject,
+			});
 		});
 	}
 
