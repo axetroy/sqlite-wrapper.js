@@ -75,7 +75,16 @@ const printDownloadInfo = (() => {
 	};
 })();
 
+/**
+ * 缓存下载/解压的 Promise，防止多个测试文件并行调用时重复下载或解压冲突（ETXTBSY）。
+ * @type {Promise<void> | null}
+ */
+let downloadPromise = null;
+
 async function main() {
+	// 如果已有下载/解压在进行中，直接等待
+	if (downloadPromise) return downloadPromise;
+
 	const sqlite3ToolZip = join(ROOT, "bin", "sqlite3-tool.zip");
 	const sqlite3Path = join(ROOT, "bin", "sqlite3" + (process.platform === "win32" ? ".exe" : ""));
 
@@ -84,27 +93,35 @@ async function main() {
 		return;
 	}
 
-	console.log("Downloading SQLite3...");
+	downloadPromise = (async () => {
+		console.log("Downloading SQLite3...");
 
-	const url = getSQLte3URL();
+		const url = getSQLte3URL();
 
-	await downloadFileWithProgress(url, sqlite3ToolZip).catch((error) => {
-		fs.rmSync(sqlite3ToolZip, { force: true });
-		throw error;
-	});
+		await downloadFileWithProgress(url, sqlite3ToolZip).catch((error) => {
+			fs.rmSync(sqlite3ToolZip, { force: true });
+			throw error;
+		});
 
-	console.log("SQLite3 downloaded successfully.");
+		console.log("SQLite3 downloaded successfully.");
 
-	const zip = new AdmZip(sqlite3ToolZip);
+		const zip = new AdmZip(sqlite3ToolZip);
 
-	zip.extractAllTo(join(ROOT, "bin"), true);
+		zip.extractAllTo(join(ROOT, "bin"), true);
 
-	if (process.platform !== "win32") {
-		// 赋予执行权限
-		fs.chmodSync(sqlite3Path, 0o755);
+		if (process.platform !== "win32") {
+			// 赋予执行权限
+			fs.chmodSync(sqlite3Path, 0o755);
+		}
+
+		console.log("Setting up SQLite3...");
+	})();
+
+	try {
+		await downloadPromise;
+	} finally {
+		downloadPromise = null;
 	}
-
-	console.log("Setting up SQLite3...");
 }
 
 // if main module
