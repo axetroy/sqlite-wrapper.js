@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import { which } from "../which.js";
 
 /**
@@ -35,6 +36,13 @@ export class ProcessManager {
 	 * @returns {import("node:child_process").ChildProcess}
 	 */
 	start() {
+		if (!this.#binary) {
+			throw new Error("sqlite3 binary path is empty. Provide a valid --binary / binary option.");
+		}
+		if (!fs.existsSync(this.#binary)) {
+			throw new Error(`sqlite3 binary not found: ${this.#binary}. Make sure sqlite3 is installed or provide a valid --binary / binary option.`);
+		}
+
 		const args = ["-json"];
 		if (this.#database) args.push(this.#database);
 		if (this.#database && this.#database !== ":memory:" && this.#initMode === "wal") {
@@ -47,6 +55,12 @@ export class ProcessManager {
 			shell: false,
 			windowsHide: true,
 		});
+
+		if (!proc.stdin || !proc.stdout || !proc.stderr) {
+			const err = new Error(`Failed to spawn sqlite3 process: stdio streams unavailable (binary=${this.#binary})`);
+			proc.kill();
+			throw err;
+		}
 
 		proc.stdin.setDefaultEncoding("utf-8");
 		proc.stdout.setEncoding("utf-8");
@@ -61,7 +75,7 @@ export class ProcessManager {
 	 * @param {string} data
 	 */
 	write(data) {
-		this.#proc?.stdin.write(data);
+		this.#proc?.stdin?.write(data);
 	}
 
 	/**
@@ -72,10 +86,10 @@ export class ProcessManager {
 		const proc = this.#proc;
 		if (!proc) return null;
 		this.#proc = null;
-		proc.stdout.removeAllListeners();
-		proc.stderr.removeAllListeners();
+		proc.stdout?.removeAllListeners();
+		proc.stderr?.removeAllListeners();
 		proc.removeAllListeners();
-		proc.stdin.destroy();
+		proc.stdin?.destroy();
 		proc.kill();
 		return proc;
 	}

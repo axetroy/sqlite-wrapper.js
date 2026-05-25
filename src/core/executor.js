@@ -251,7 +251,14 @@ export class SQLiteExecutor {
 	 * 启动 sqlite3 进程并注册 stdout/stderr/error/close 事件处理。
 	 */
 	#startProcess() {
-		const proc = this.#processManager.start();
+		let proc;
+		try {
+			proc = this.#processManager.start();
+		} catch (error) {
+			this.#fatalError = toError(error);
+			this.#logger?.error?.("failed to start sqlite3 process", this.#fatalError);
+			return;
+		}
 
 		proc.stdout.on("data", (chunk) => {
 			this.#handleStdoutChunk(chunk);

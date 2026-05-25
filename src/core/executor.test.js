@@ -179,8 +179,7 @@ describe("SQLiteExecutor", () => {
 		const missingPath = path.join(os.tmpdir(), "missing-sqlite3-binary");
 		const executor = new SQLiteExecutor({ binary: missingPath, autoRestart: false });
 
-		await new Promise((resolve) => setImmediate(resolve));
-		await assert.rejects(executor.query("SELECT 1"), /SQLiteExecutor is closed|spawn|ENOENT|exited unexpectedly/i);
+		await assert.rejects(executor.query("SELECT 1"), /sqlite3 binary not found/i);
 		await executor.close();
 	});
 
