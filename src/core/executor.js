@@ -32,6 +32,7 @@ export class SQLiteExecutor {
 	#proc = null;
 	#inflightTasks = [];
 	#pendingFinalizeTasks = new Set();
+	#scheduledFinalize = false;
 	#sharedValueParser = null;
 	#logger;
 	#statementTimeout;
@@ -427,6 +428,38 @@ export class SQLiteExecutor {
 		this.#processManager.write(payload);
 	}
 
+	/**
+	 * 批量处理 pendingFinalize 任务，合并多次 setImmediate 为一次。
+	 * 同一 I/O poll 中多个 sentinel 到达时，只调度一次 setImmediate。
+	 */
+	#scheduleFinalizeCheck() {
+		if (this.#scheduledFinalize) return;
+		this.#scheduledFinalize = true;
+		setImmediate(() => {
+			this.#scheduledFinalize = false;
+			const tasks = [...this.#pendingFinalizeTasks];
+			this.#pendingFinalizeTasks.clear();
+			for (const task of tasks) {
+				if (task.stderrText) {
+					this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
+					continue;
+				}
+
+				if (task.consumerError) {
+					this.#settleTask(task, task.consumerError, undefined);
+					continue;
+				}
+
+				if (task.kind === "query") {
+					this.#settleTask(task, null, task.rows);
+					continue;
+				}
+
+				this.#settleTask(task, null, undefined);
+			}
+		});
+	}
+
 	/** 将延迟队列中的任务恢复到主队列头部。 */
 	#restoreDeferred() {
 		this.queue.prependAll(this.#deferredQueue);
@@ -486,26 +519,7 @@ export class SQLiteExecutor {
 			}
 
 			this.#pendingFinalizeTasks.add(task);
-			setImmediate(() => {
-				if (!this.#pendingFinalizeTasks.has(task)) return;
-				this.#pendingFinalizeTasks.delete(task);
-				if (task.stderrText) {
-					this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-					return;
-				}
-
-				if (task.consumerError) {
-					this.#settleTask(task, task.consumerError, undefined);
-					return;
-				}
-
-				if (task.kind === "query") {
-					this.#settleTask(task, null, task.rows);
-					return;
-				}
-
-				this.#settleTask(task, null, undefined);
-			});
+			this.#scheduleFinalizeCheck();
 			this.#pumpQueue();
 			return;
 		}
