@@ -2,6 +2,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig } from "@rslib/core";
 
+/** @param {string} dir */
+function findAllDts(dir) {
+	const results = [];
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const fullPath = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			results.push(...findAllDts(fullPath));
+		} else if (entry.name.endsWith(".d.ts")) {
+			results.push(fullPath);
+		}
+	}
+	return results;
+}
+
 class RspackDtsCopyPlugin {
 	/**
 	 *
@@ -12,29 +26,28 @@ class RspackDtsCopyPlugin {
 
 		compiler.hooks.emit.tapPromise("RspackDtsCopyPlugin", async (compilation) => {
 			const srcDir = path.join(projectDir, "src");
-			const dtsFiles = fs.readdirSync(srcDir, "utf8").filter((v) => v.endsWith(".d.ts"));
+			const dtsFiles = findAllDts(srcDir);
 
+			/** @param {string} filepath @param {boolean} isModule */
 			const createSource = (filepath, isModule) => {
 				let content = fs.readFileSync(filepath, "utf8");
 
-				// TODO: 更加完善的处理方法应该是使用 AST 进行处理，而不是简单的正则替换
+				// 仅替换相对路径导入（./ 或 ../）中的 .js 后缀
 				if (isModule) {
-					// 替换导入的模块路径为对应的模块类型，把 .js 的模块导入，替换成为 .mts
-					content = content.replace(/(from\s+['"].+?)\.js(['"])/g, "$1.mts$2");
+					content = content.replace(/(from\s+['"]\.\.?\/.+?)\.js(['"])/g, "$1.mts$2");
 				} else {
-					// 替换导入的模块路径为对应的模块类型，把 .js 的模块导入，替换成为 .cts
-					content = content.replace(/(from\s+['"].+?)\.js(['"])/g, "$1.cts$2");
+					content = content.replace(/(from\s+['"]\.\.?\/.+?)\.js(['"])/g, "$1.cts$2");
 				}
 
 				return new compiler.webpack.sources.RawSource(content);
 			};
 
-			for (const file of dtsFiles) {
-				const absolutePath = path.join(srcDir, file);
-				const filename = path.basename(file, ".d.ts");
+			for (const absolutePath of dtsFiles) {
+				const relativePath = path.relative(srcDir, absolutePath);
+				const nameWithoutExt = relativePath.replace(/\.d\.ts$/, "");
 
-				compilation.emitAsset("esm/" + filename + ".d.mts", createSource(absolutePath, true));
-				compilation.emitAsset("cjs/" + filename + ".d.cts", createSource(absolutePath, false));
+				compilation.emitAsset("esm/" + nameWithoutExt + ".d.mts", createSource(absolutePath, true));
+				compilation.emitAsset("cjs/" + nameWithoutExt + ".d.cts", createSource(absolutePath, false));
 			}
 		});
 	}
