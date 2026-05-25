@@ -332,12 +332,9 @@ export class SQLiteExecutor {
 				return;
 			}
 
-			if (task.kind === "query") {
-				this.#finalizeTask(task, { value: task.rows });
-				return;
-			}
-
-			this.#finalizeTask(task, { value: undefined });
+			// stderr 和 stdout 是独立的 OS 管道，data 事件触发顺序无法保证。
+			// 如果 stderr 尚未到达，延迟一帧再 finalize，给 stderr 一个事件循环周期的时间到达。
+			this.#scheduleFinalizeCheck(task);
 			return;
 		}
 
@@ -423,6 +420,36 @@ export class SQLiteExecutor {
 			this.#settleTask(deferred, error, undefined);
 			deferred = this.#deferredQueue.dequeue();
 		}
+	}
+
+	/**
+	 * 延迟一帧检查 sentinel 完成时尚未到达的 stderr。
+	 * stderr 和 stdout 是独立的 OS 管道，Node.js 的 data 事件触发顺序无法保证。
+	 * 通过 setImmediate 给 stderr 一个事件循环周期的时间先于 finalize 到达。
+	 * @param {object} task
+	 */
+	#scheduleFinalizeCheck(task) {
+		if (task.errorScheduled) return;
+		task.errorScheduled = true;
+		setImmediate(() => {
+			task.errorScheduled = false;
+			if (task.stderrText) {
+				this.#finalizeTask(task, { error: new Error(task.stderrText.trim()) });
+				return;
+			}
+
+			if (task.consumerError) {
+				this.#finalizeTask(task, { error: task.consumerError });
+				return;
+			}
+
+			if (task.kind === "query") {
+				this.#finalizeTask(task, { value: task.rows });
+				return;
+			}
+
+			this.#finalizeTask(task, { value: undefined });
+		});
 	}
 
 	/**
