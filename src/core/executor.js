@@ -5,8 +5,7 @@ import { Queue } from "./queue.js";
 import { ProcessManager } from "./process.js";
 import { createJsonValueParser } from "./parser.js";
 import { toError } from "./parser.js";
-import { isSentinelRow } from "./protocol.js";
-import { buildPayload } from "./protocol.js";
+import { isSentinelRow, buildPayload, TOKEN_COLUMN } from "./protocol.js";
 import { generateToken } from "../utils/token.js";
 import { createTimeoutError } from "../utils/timeout.js";
 import { setupStreamParser, AsyncRowBuffer } from "../stream/queryStream.js";
@@ -419,8 +418,27 @@ export class SQLiteExecutor {
 
 		const now = performance.now();
 		let payload = "";
+
+		// All-execute batches can be wrapped in a single WAL transaction for 3-10x
+		// write throughput. Sentinels are deferred until after COMMIT so each task
+		// still resolves independently. Single-task batches skip the wrapping.
+		const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
+		if (useWalBatch) {
+			payload = "BEGIN;\n";
+			for (const task of batch) {
+				payload += `${task.sql}\n`;
+			}
+			payload += "COMMIT;\n";
+			for (const task of batch) {
+				payload += `SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`;
+			}
+		} else {
+			for (const task of batch) {
+				payload += buildPayload(task.sql, task.token, { skipNormalize: task.sqlNormalized });
+			}
+		}
+
 		for (const task of batch) {
-			payload += buildPayload(task.sql, task.token, { skipNormalize: task.sqlNormalized });
 			task.startTime = now;
 			task.timer = setTimeout(() => this.#handleTaskTimeout(task), task.timeout);
 		}
