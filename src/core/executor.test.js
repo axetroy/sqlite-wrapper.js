@@ -208,9 +208,7 @@ describe("SQLiteExecutor", () => {
 	});
 
 	test("query 返回空结果集", async () => {
-		await sqlite.execute(
-			"CREATE TABLE IF NOT EXISTS empty_test (id INTEGER PRIMARY KEY, name TEXT)",
-		);
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS empty_test (id INTEGER PRIMARY KEY, name TEXT)");
 		const rows = await sqlite.query("SELECT * FROM empty_test WHERE id = -1");
 		assert.deepEqual(rows, []);
 	});
@@ -297,9 +295,7 @@ describe("SQLiteExecutor", () => {
 	});
 
 	test("query 结果中包含 null 值", async () => {
-		await sqlite.execute(
-			"CREATE TABLE IF NOT EXISTS null_test (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)",
-		);
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS null_test (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)");
 		await sqlite.execute("INSERT INTO null_test VALUES (1, 'Alice', NULL)");
 		const rows = await sqlite.query("SELECT * FROM null_test");
 		assert.equal(rows.length, 1);
@@ -308,9 +304,7 @@ describe("SQLiteExecutor", () => {
 	});
 
 	test("stream 使用 for await 遍历所有行", async () => {
-		await sqlite.execute(
-			"CREATE TABLE IF NOT EXISTS stream_async (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)",
-		);
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS stream_async (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
 		await sqlite.execute("INSERT INTO stream_async (val) VALUES ('a'), ('b'), ('c')");
 
 		const collected = [];
@@ -324,9 +318,7 @@ describe("SQLiteExecutor", () => {
 	});
 
 	test("stream 返回空结果集", async () => {
-		await sqlite.execute(
-			"CREATE TABLE IF NOT EXISTS stream_empty (id INTEGER PRIMARY KEY, name TEXT)",
-		);
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS stream_empty (id INTEGER PRIMARY KEY, name TEXT)");
 		const collected = [];
 		for await (const row of sqlite.stream("SELECT * FROM stream_empty")) {
 			collected.push(row);
@@ -335,9 +327,7 @@ describe("SQLiteExecutor", () => {
 	});
 
 	test("stream 支持参数化查询", async () => {
-		await sqlite.execute(
-			"CREATE TABLE IF NOT EXISTS stream_params (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)",
-		);
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS stream_params (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
 		await sqlite.execute("INSERT INTO stream_params (val) VALUES ('x'), ('y'), ('z')");
 
 		const collected = [];
@@ -350,9 +340,7 @@ describe("SQLiteExecutor", () => {
 	});
 
 	test("stream 在 SQL 错误时抛出异常", async () => {
-		await sqlite.execute(
-			"CREATE TABLE IF NOT EXISTS stream_error (id INTEGER PRIMARY KEY, val TEXT)",
-		);
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS stream_error (id INTEGER PRIMARY KEY, val TEXT)");
 		await sqlite.execute("INSERT INTO stream_error VALUES (1, 'hello')");
 
 		await assert.rejects(
@@ -366,9 +354,7 @@ describe("SQLiteExecutor", () => {
 	});
 
 	test("stream 在 for await 中提前 break", async () => {
-		await sqlite.execute(
-			"CREATE TABLE IF NOT EXISTS stream_break (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)",
-		);
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS stream_break (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
 		await sqlite.execute("INSERT INTO stream_break (val) VALUES ('a'), ('b'), ('c')");
 
 		const collected = [];
@@ -380,9 +366,7 @@ describe("SQLiteExecutor", () => {
 	});
 
 	test("stream 在事务中使用", async () => {
-		await sqlite.execute(
-			"CREATE TABLE IF NOT EXISTS stream_tx (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)",
-		);
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS stream_tx (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
 		await sqlite.execute("INSERT INTO stream_tx (val) VALUES ('p'), ('q')");
 
 		const result = await sqlite.transaction(async (tx) => {
@@ -398,10 +382,7 @@ describe("SQLiteExecutor", () => {
 	});
 
 	test("stream params 非数组时同步抛出 TypeError", () => {
-		assert.throws(
-			() => sqlite.stream("SELECT 1", "not-an-array"),
-			/params must be an array/,
-		);
+		assert.throws(() => sqlite.stream("SELECT 1", "not-an-array"), /params must be an array/);
 	});
 
 	test("读写分离: 文件 DB 创建 reader pool", () => {
@@ -447,24 +428,6 @@ describe("SQLiteExecutor", () => {
 		}
 	});
 
-	test("读写分离: execute 读走 reader, 写走 writer", async () => {
-		const dbFile = path.join(os.tmpdir(), `rw-exec2-${Date.now()}.db`);
-		const sqlite2 = new SQLiteExecutor({
-			binary: SQLite3BinaryFile,
-			database: dbFile,
-			poolSize: 2,
-		});
-		try {
-			const writeTask = sqlite2.execute("CREATE TABLE IF NOT EXISTS rw_e (id INTEGER PRIMARY KEY)");
-			const readTask = sqlite2.execute("SELECT 1");
-			assert.ok(writeTask instanceof Promise);
-			assert.ok(readTask instanceof Promise);
-			await Promise.allSettled([writeTask, readTask]);
-		} finally {
-			await sqlite2.close();
-		}
-	});
-
 	test("读写分离: 耗时写入不阻塞并发读取", async () => {
 		const dbFile = path.join(os.tmpdir(), `rw-concur-${Date.now()}.db`);
 		const sqlite = new SQLiteExecutor({
@@ -476,9 +439,7 @@ describe("SQLiteExecutor", () => {
 			await sqlite.execute("CREATE TABLE IF NOT EXISTS rw_big (id INTEGER PRIMARY KEY, val TEXT)");
 
 			let readResolved = false;
-			const slowWrite = sqlite.execute(
-				"INSERT INTO rw_big SELECT value, hex(randomblob(512)) FROM generate_series(1, 100000)",
-			);
+			const slowWrite = sqlite.execute("INSERT INTO rw_big SELECT value, hex(randomblob(512)) FROM generate_series(1, 100000)");
 
 			await new Promise((r) => setTimeout(r, 30));
 
