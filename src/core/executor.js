@@ -260,11 +260,17 @@ export class SQLiteExecutor {
 			return;
 		}
 
+		if (!proc.stdout) {
+			this.#fatalError = new Error(`Failed to spawn sqlite3 process: stdio unavailable (binary=${this.#binary})`);
+			this.#processManager.kill();
+			return;
+		}
+
 		proc.stdout.on("data", (chunk) => {
 			this.#handleStdoutChunk(chunk);
 		});
 
-		proc.stderr.on("data", (chunk) => {
+		proc.stderr?.on("data", (chunk) => {
 			this.#handleStderrChunk(chunk);
 		});
 

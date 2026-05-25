@@ -56,15 +56,9 @@ export class ProcessManager {
 			windowsHide: true,
 		});
 
-		if (!proc.stdin || !proc.stdout || !proc.stderr) {
-			const err = new Error(`Failed to spawn sqlite3 process: stdio streams unavailable (binary=${this.#binary})`);
-			proc.kill();
-			throw err;
-		}
-
-		proc.stdin.setDefaultEncoding("utf-8");
-		proc.stdout.setEncoding("utf-8");
-		proc.stderr.setEncoding("utf-8");
+		proc.stdin?.setDefaultEncoding("utf-8");
+		proc.stdout?.setEncoding("utf-8");
+		proc.stderr?.setEncoding("utf-8");
 
 		this.#proc = proc;
 		return proc;

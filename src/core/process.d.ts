@@ -23,7 +23,6 @@ export declare class ProcessManager {
 	/**
 	 * 启动子进程（json 模式），返回 ChildProcess 实例。
 	 * @throws {Error} 如果 binary 路径为空或文件不存在
-	 * @throws {Error} 如果 spawn 后 stdio 管道不可用
 	 */
 	start(): ChildProcess;
 
