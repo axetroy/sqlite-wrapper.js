@@ -115,15 +115,17 @@ SQLite Database
 └─────────┬──────────┘
           │
           ▼
-┌────────────────────┐
-│   SQLiteExecutor   │
-│                    │
-│ - Queue            │
-│ - Parser           │
-│ - Protocol         │
-│ - Transaction      │
-│ - Timeout          │
-└─────────┬──────────┘
+┌─────────────────────────────────────────┐
+│              SQLiteExecutor             │
+│  ┌──────────────┐  ┌──────────────────┐ │
+│  │PipelineEngine│  │TransactionScope  │ │
+│  │ - Queue       │  │ - Scope Chain    │ │
+│  │ - Stdout Parse│  │ - Deferred Queue │ │
+│  │ - Sentinel    │  │ - Enter / Exit   │ │
+│  │ - Batching    │  └──────────────────┘ │
+│  └──────┬───────┘                        │
+│         │                                │
+└─────────┼────────────────────────────────┘
           │
           ▼
 ┌────────────────────┐
@@ -831,30 +833,33 @@ stdin/stdout 模式：
 ```text id="q7p2v5"
 src/
  ├── core/
- │    ├── executor.js      # SQLiteExecutor：主入口，串行队列 + 事务 + 自动重启
- │    ├── taskWorker.js     # TaskWorker：单进程任务执行器，支持管线化
- │    ├── readerPool.js     # ReaderPool：只读连接池，round-robin 分发
- │    ├── metrics.js        # Metrics：运行时指标收集器
- │    ├── classifier.js     # SQL 分类器（read / write）用于读写分离
- │    ├── parser.js         # JSON 流式解析器（createJsonValueParser / createRowStreamParser）
- │    ├── protocol.js       # Sentinel 协议（buildPayload / isSentinelRow）
- │    ├── queue.js          # 双端队列
- │    └── process.js        # 子进程管理器
+ │    ├── executor.js         # SQLiteExecutor：API 编排，组合 PipelineEngine + TransactionScope
+ │    ├── pipelineEngine.js   # PipelineEngine：管线协议，队列 + stdout 解析 + sentinel
+ │    ├── transactionScope.js # TransactionScope：事务域隔离，延迟队列 + scope 门控
+ │    ├── settleUtils.js      # 共享结算工具（collectQueryRows / processStreamRows / settleTask）
+ │    ├── taskWorker.js       # TaskWorker：单进程任务执行器，支持管线化
+ │    ├── readerPool.js       # ReaderPool：只读连接池，round-robin 分发
+ │    ├── metrics.js          # Metrics：运行时指标收集器
+ │    ├── classifier.js       # SQL 分类器（read / write）用于读写分离
+ │    ├── parser.js           # JSON 流式解析器（createJsonValueParser / createRowStreamParser）
+ │    ├── protocol.js         # Sentinel 协议（buildPayload / isSentinelRow）
+ │    ├── queue.js            # 双端队列
+ │    └── process.js          # 子进程管理器
  │
  ├── transaction/
- │    └── transaction.js    # 事务工具（VALID_TRANSACTION_MODES, createTransactionHandle）
+ │    └── transaction.js      # 事务工具（VALID_TRANSACTION_MODES, createTransactionHandle）
  │
  ├── stream/
- │    └── stream.js         # 流式查询（setupStreamParser, AsyncRowBuffer）
+ │    └── stream.js           # 流式查询（setupStreamParser, AsyncRowBuffer）
  │
  ├── utils/
- │    ├── timeout.js        # 超时控制
- │    └── token.js          # 唯一 token 生成
+ │    ├── timeout.js          # 超时控制
+ │    └── token.js            # 唯一 token 生成
  │
- ├── constants.js           # 共享常量（TOKEN_COLUMN）
- ├── utils.js               # SQL 工具（normalizeSQL, interpolateSQL, escapeValue）
- ├── which.js               # 可执行文件查找
- └── index.js               # 模块入口
+ ├── constants.js             # 共享常量（TOKEN_COLUMN）
+ ├── utils.js                 # SQL 工具（normalizeSQL, interpolateSQL, escapeValue）
+ ├── which.js                 # 可执行文件查找
+ └── index.js                 # 模块入口
 ```
 
 ---
@@ -966,12 +971,13 @@ sqlite3 CLI 负责：
 ```text id="y6v2k9"
 Node.js — SQLiteExecutor
   │
-  ├── Queue Scheduler（串行队列 + 事务域隔离）
+  ├── TransactionScope（事务域隔离：scope chain / deferred queue / enter / exit / rejectAll）
+  ├── PipelineEngine（管线协议：queue / inflight / stdout sentinel / stderr race / batching）
+  │     └── settleUtils（共享结算：collectQueryRows / processStreamRows / settleTask）
   ├── SQL Protocol（buildPayload / isSentinelRow）
   ├── Stream Parser（createJsonValueParser / createRowStreamParser）
-  ├── Transaction Manager（BEGIN / COMMIT / ROLLBACK）
   ├── Timeout Manager（setTimeout + process级故障恢复）
-  ├── Crash Recovery（autoRestart）
+  ├── Crash Recovery（autoRestart + pipeline.rejectAll）
   ├── SQL Classifier（classifySQL：区分 read / write）
   ├── ReaderPool（多个 TaskWorker，round-robin 分发只读任务）
   │     └── TaskWorker（单进程执行器，支持管线化 batch）

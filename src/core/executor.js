@@ -1,12 +1,8 @@
 import { once } from "node:events";
 import { DEFAULT_STATEMENT_TIMEOUT } from "../utils/timeout.js";
 import { VALID_TRANSACTION_MODES } from "../transaction/transaction.js";
-import { Queue } from "./queue.js";
 import { ProcessManager } from "./process.js";
-import { createJsonValueParser } from "./parser.js";
 import { toError } from "./parser.js";
-import { isSentinelRow, buildPayload, TOKEN_COLUMN } from "./protocol.js";
-import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { generateToken } from "../utils/token.js";
 import { createTimeoutError } from "../utils/timeout.js";
 import { setupStreamParser, AsyncRowBuffer } from "../stream/stream.js";
@@ -14,8 +10,8 @@ import { interpolateSQL, normalizeSQL } from "../utils.js";
 import { classifySQL } from "./classifier.js";
 import { ReaderPool } from "./readerPool.js";
 import { Metrics } from "./metrics.js";
-
-const DEFAULT_BATCH_SIZE = 10;
+import { TransactionScope } from "./transactionScope.js";
+import { PipelineEngine } from "./pipelineEngine.js";
 
 /**
  * SQLite 执行器。
@@ -24,16 +20,8 @@ const DEFAULT_BATCH_SIZE = 10;
  * 内部使用管线化队列批量发送任务，基于 Sentinel token 协议检测单个 SQL 任务的输出边界。
  */
 export class SQLiteExecutor {
-	queue = new Queue();
-	#deferredQueue = new Queue();
-	#activeScopeId = null;
-	#scopeChain = Promise.resolve();
 	#closed = false;
 	#proc = null;
-	#inflightTasks = [];
-	#pendingFinalizeTasks = new Set();
-	#scheduledFinalize = false;
-	#sharedValueParser = null;
 	#logger;
 	#statementTimeout;
 	#autoRestart;
@@ -44,6 +32,8 @@ export class SQLiteExecutor {
 	#binary;
 	#database;
 	#metrics;
+	#pipeline;
+	#txScope = new TransactionScope();
 
 	/**
 	 * @param {{
@@ -66,7 +56,14 @@ export class SQLiteExecutor {
 		this.#metrics = metrics ?? new Metrics();
 
 		this.#processManager = new ProcessManager({ binary, database });
-		this.#sharedValueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
+		this.#pipeline = new PipelineEngine(this.#processManager, {
+			metrics: this.#metrics,
+			statementTimeout: this.#statementTimeout,
+			logger: this.#logger,
+			onTaskTimeout: (task) => this.#handleProcessFailure(
+				createTimeoutError(task.timeout, task.sql),
+			),
+		});
 		this.#startProcess();
 
 		if (poolSize > 0 && database !== ":memory:") {
@@ -83,7 +80,7 @@ export class SQLiteExecutor {
 
 	/** 当前待处理的任务总数（队列中 + 执行中 + reader 队列中） */
 	get pendingStatements() {
-		return this.queue.size + this.#deferredQueue.size + this.#inflightTasks.length + this.#pendingFinalizeTasks.size + (this.#readerPool?.pendingStatements ?? 0);
+		return this.#txScope.pendingStatements + this.#pipeline.pendingStatements + (this.#readerPool?.pendingStatements ?? 0);
 	}
 
 	/** 读取器连接池（null 表示未启用读写分离）。 */
@@ -160,16 +157,7 @@ export class SQLiteExecutor {
 			throw new TypeError(`transaction mode must be one of: ${VALID_TRANSACTION_MODES.join(", ")}`);
 		}
 
-		const scopeId = Symbol("transaction");
-		let release = null;
-		const gate = new Promise((resolve) => {
-			release = resolve;
-		});
-
-		const previous = this.#scopeChain;
-		this.#scopeChain = previous.catch(() => {}).then(() => gate);
-		await previous.catch(() => {});
-		this.#activeScopeId = scopeId;
+		const { scopeId, release } = await this.#txScope.enter();
 
 		const tx = {
 			execute: (sql, params = [], txOptions = {}) => this.#enqueue("execute", sql, params, txOptions, scopeId),
@@ -194,8 +182,9 @@ export class SQLiteExecutor {
 				throw error;
 			}
 		} finally {
-			this.#activeScopeId = null;
-			this.#restoreDeferred();
+			this.#txScope.exit();
+			this.#txScope.restoreDeferred(this.#pipeline.mainQueue);
+			this.#pipeline.pump();
 			release();
 		}
 	}
@@ -207,7 +196,8 @@ export class SQLiteExecutor {
 	async close() {
 		if (this.#closed) return;
 		this.#closed = true;
-		this.#rejectQueues(new Error("SQLiteExecutor is closed"));
+		this.#pipeline.kill();
+		this.#txScope.rejectAll(new Error("SQLiteExecutor is closed"));
 
 		this.#readerPool?.kill();
 
@@ -226,11 +216,6 @@ export class SQLiteExecutor {
 		void this.close();
 	}
 
-	/**
-	 * 验证超时时间配置是否合法。
-	 * @param {unknown} value
-	 * @returns {number}
-	 */
 	#normalizeTimeout(value) {
 		if (!Number.isInteger(value) || value <= 0) {
 			throw new TypeError("statementTimeout must be a positive integer");
@@ -238,11 +223,7 @@ export class SQLiteExecutor {
 		return value;
 	}
 
-	/**
-	 * 启动 sqlite3 进程并注册 stdout/stderr/error/close 事件处理。
-	 */
 	#startProcess() {
-		this.#sharedValueParser?.reset();
 		let proc;
 		try {
 			proc = this.#processManager.start();
@@ -259,11 +240,11 @@ export class SQLiteExecutor {
 		}
 
 		proc.stdout.on("data", (chunk) => {
-			this.#handleStdoutChunk(chunk);
+			this.#pipeline.handleStdoutChunk(chunk);
 		});
 
 		proc.stderr?.on("data", (chunk) => {
-			this.#handleStderrChunk(chunk);
+			this.#pipeline.handleStderrChunk(chunk);
 		});
 
 		proc.on("error", (error) => {
@@ -277,18 +258,9 @@ export class SQLiteExecutor {
 		});
 
 		this.#proc = proc;
-		this.#pumpQueue();
+		this.#pipeline.activate();
 	}
 
-	/**
-	 * 决定任务应该由 writer 还是 reader 执行，并分发。
-	 * @param {"execute" | "query" | "stream"} kind
-	 * @param {string} sql
-	 * @param {any[]} params
-	 * @param {{ timeout?: number, onRow?: Function }} options
-	 * @param {symbol | null} scopeId
-	 * @returns {Promise<any>}
-	 */
 	#enqueue(kind, sql, params, options, scopeId) {
 		if (this.#closed) return Promise.reject(new Error("SQLiteExecutor is closed"));
 		if (this.#fatalError) return Promise.reject(this.#fatalError);
@@ -298,10 +270,6 @@ export class SQLiteExecutor {
 		const token = generateToken();
 		const onRow = options?.onRow ?? null;
 
-		// Normalize the TEMPLATE first so:
-		//   - normalizeSQL cache key = original SQL (template, not interpolated)
-		//   - classifySQL also uses a cacheable key (normalized template with ? preserved)
-		//   - buildPayload can skip the second normalizeSQL scan
 		const normalized = normalizeSQL(sql);
 
 		let formatted;
@@ -328,17 +296,6 @@ export class SQLiteExecutor {
 		return this.#enqueueWriter(kind, formatted, timeout, token, onRow, null, sqlNormalized);
 	}
 
-	/**
-	 * 创建任务发送到 writer 队列。
-	 * @param {"execute" | "query" | "stream"} kind
-	 * @param {string} sql
-	 * @param {number} timeout
-	 * @param {string} token
-	 * @param {Function | null} onRow
-	 * @param {symbol | null} scopeId
-	 * @param {boolean} [sqlNormalized=false]
-	 * @returns {Promise<any>}
-	 */
 	#enqueueWriter(kind, sql, timeout, token, onRow, scopeId, sqlNormalized = false) {
 		this.#metrics.incrementTasksTotal(kind);
 		return new Promise((resolve, reject) => {
@@ -361,28 +318,17 @@ export class SQLiteExecutor {
 			};
 
 			if (kind === "stream") {
-				task.rowParser = setupStreamParser(task, this.#sharedValueParser);
+				task.rowParser = setupStreamParser(task, this.#pipeline);
 			}
 
-			if (this.#activeScopeId && this.#activeScopeId !== scopeId) {
-				this.#deferredQueue.enqueue(task);
+			if (this.#txScope.isDeferred(scopeId)) {
+				this.#txScope.defer(task);
 			} else {
-				this.queue.enqueue(task);
+				this.#pipeline.enqueue(task);
 			}
-
-			this.#pumpQueue();
 		});
 	}
 
-	/**
-	 * 创建任务发送到 reader 池。
-	 * @param {"execute" | "query" | "stream"} kind
-	 * @param {string} sql
-	 * @param {number} timeout
-	 * @param {string} token
-	 * @param {Function | null} onRow
-	 * @returns {Promise<any>}
-	 */
 	#enqueueReader(kind, sql, timeout, token, onRow) {
 		return new Promise((resolve, reject) => {
 			this.#readerPool.enqueue({
@@ -397,197 +343,14 @@ export class SQLiteExecutor {
 		});
 	}
 
-	/**
-	 * 尝试从主队列批量取出任务发送给 sqlite3 进程执行。
-	 * 非 stream 任务最多批量发送 DEFAULT_BATCH_SIZE 个；
-	 * stream 任务独占发送（队列中有 stream 时不会与其他任务打包）。
-	 */
-	#pumpQueue() {
-		if (this.#closed || !this.#proc) return;
-
-		const batch = [];
-		while (batch.length < DEFAULT_BATCH_SIZE && !this.queue.isEmpty()) {
-			const task = this.queue.peek();
-			if (task.kind === "stream" && (batch.length > 0 || this.#inflightTasks.length > 0)) break;
-			this.queue.dequeue();
-			batch.push(task);
-		}
-		if (batch.length === 0) return;
-
-		const now = performance.now();
-		let payload = "";
-
-		// All-execute batches can be wrapped in a single WAL transaction for 3-10x
-		// write throughput. Sentinels are deferred until after COMMIT so each task
-		// still resolves independently. Single-task batches skip the wrapping.
-		const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
-		if (useWalBatch) {
-			payload = "BEGIN;\n";
-			for (const task of batch) {
-				payload += `${task.sql}\n`;
-			}
-			payload += "COMMIT;\n";
-			for (const task of batch) {
-				payload += `SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`;
-			}
-		} else {
-			for (const task of batch) {
-				payload += buildPayload(task.sql, task.token, { skipNormalize: task.sqlNormalized });
-			}
-		}
-
-		for (const task of batch) {
-			task.startTime = now;
-			task.timer = setTimeout(() => this.#handleTaskTimeout(task), task.timeout);
-		}
-		this.#inflightTasks.push(...batch);
-		this.#processManager.write(payload);
-	}
-
-	/**
-	 * 批量处理 pendingFinalize 任务，合并多次 setImmediate 为一次。
-	 * 同一 I/O poll 中多个 sentinel 到达时，只调度一次 setImmediate。
-	 */
-	#scheduleFinalizeCheck() {
-		if (this.#scheduledFinalize) return;
-		this.#scheduledFinalize = true;
-		setImmediate(() => {
-			this.#scheduledFinalize = false;
-			const tasks = [...this.#pendingFinalizeTasks];
-			this.#pendingFinalizeTasks.clear();
-			for (const task of tasks) {
-				if (task.stderrText) {
-					this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-					continue;
-				}
-
-				if (task.consumerError) {
-					this.#settleTask(task, task.consumerError, undefined);
-					continue;
-				}
-
-				if (task.kind === "query") {
-					this.#settleTask(task, null, task.rows);
-					continue;
-				}
-
-				this.#settleTask(task, null, undefined);
-			}
-		});
-	}
-
-	/** 将延迟队列中的任务恢复到主队列头部。 */
-	#restoreDeferred() {
-		this.queue.prependAll(this.#deferredQueue);
-		this.#pumpQueue();
-	}
-
-	/**
-	 * 处理 sqlite3 的 stdout 输出。
-	 * 对于 stream 类型任务，先通过行流解析器逐行处理，剩余数据转给 JSON 值解析器。
-	 * @param {string} chunk
-	 */
-	#handleStdoutChunk(chunk) {
-		const task = this.#inflightTasks[0];
-		if (!task) return;
-
-		if (task.kind === "stream" && task.rowParser && !task.rowParser.finished) {
-			const leftover = task.rowParser.feed(chunk);
-			if (leftover) this.#sharedValueParser.feed(leftover);
-			return;
-		}
-
-		this.#sharedValueParser.feed(chunk);
-	}
-
-	/**
-	 * 处理一个完整 JSON 值的解析结果。
-	 * 如果是 sentinel 行，则根据 stderr/consumerError 决定拒绝还是完成；
-	 * 否则按 query/stream 类型分别收集行数据或逐行回调。
-	 * @param {string} raw
-	 */
-	#handleParsedValue(raw) {
-		const task = this.#inflightTasks[0];
-		if (!task) return;
-
-		let parsed;
-		try {
-			parsed = JSON.parse(raw);
-		} catch (error) {
-			this.#rejectQueues(new Error(`Invalid JSON from sqlite3: ${toError(error).message}`));
-			return;
-		}
-
-		if (isSentinelRow(parsed, task.token)) {
-			clearTimeout(task.timer);
-			this.#inflightTasks.shift();
-
-			if (task.stderrText) {
-				this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-				this.#pumpQueue();
-				return;
-			}
-
-			if (task.consumerError) {
-				this.#settleTask(task, task.consumerError, undefined);
-				this.#pumpQueue();
-				return;
-			}
-
-			this.#pendingFinalizeTasks.add(task);
-			this.#scheduleFinalizeCheck();
-			this.#pumpQueue();
-			return;
-		}
-
-		if (task.kind === "query") {
-			collectQueryRows(task, parsed);
-			return;
-		}
-
-		if (task.kind === "stream") {
-			processStreamRows(task, parsed);
-		}
-	}
-
-	/**
-	 * 处理 sqlite3 的 stderr 输出。
-	 * 将错误文本附加到 inflight 任务或 pendingFinalize 任务；
-	 * 如果没有匹配任务则通过 logger 输出。
-	 * @param {string} chunk
-	 */
-	#handleStderrChunk(chunk) {
-		const task = this.#inflightTasks[0] ?? this.#pendingFinalizeTasks.values().next().value;
-		if (!task) {
-			this.#logger?.error?.(String(chunk).trim());
-			return;
-		}
-
-		task.stderrText += String(chunk);
-	}
-
-	/**
-	 * 任务超时处理，触发进程级失败恢复。
-	 * @param {object} task
-	 */
-	#handleTaskTimeout(task) {
-		if (this.#inflightTasks[0] !== task) return;
-		this.#metrics.incrementTasksTimeout();
-		this.#handleProcessFailure(createTimeoutError(task.timeout, task.sql));
-	}
-
-	/**
-	 * 处理 sqlite3 进程级别的失败。
-	 * 杀死当前进程、拒绝所有队列中的任务。
-	 * 如果启用了 autoRestart 则自动重启进程。
-	 * @param {Error} error
-	 */
 	#handleProcessFailure(error) {
 		const failure = toError(error);
-		const proc = this.#processManager.kill();
+		this.#processManager.kill();
 		this.#proc = null;
 
-		this.#rejectQueues(failure);
+		this.#pipeline.deactivate();
+		this.#pipeline.rejectAll(failure);
+		this.#txScope.rejectAll(failure);
 
 		if (!this.#closed && this.#autoRestart) {
 			this.#metrics.incrementProcessRestarts();
@@ -597,36 +360,5 @@ export class SQLiteExecutor {
 
 		this.#fatalError = failure;
 		this.#closed = true;
-	}
-
-	/** 拒绝 inflight 任务以及主队列、延迟队列、pendingFinalize 中的所有待处理任务。 */
-	#rejectQueues(error) {
-		const all = this.#inflightTasks;
-		this.#inflightTasks = [];
-
-		for (const task of all) {
-			this.#settleTask(task, error, undefined);
-		}
-
-		let queued = this.queue.dequeue();
-		while (queued) {
-			this.#settleTask(queued, error, undefined);
-			queued = this.queue.dequeue();
-		}
-
-		let deferred = this.#deferredQueue.dequeue();
-		while (deferred) {
-			this.#settleTask(deferred, error, undefined);
-			deferred = this.#deferredQueue.dequeue();
-		}
-
-		for (const task of this.#pendingFinalizeTasks) {
-			this.#settleTask(task, error, undefined);
-		}
-		this.#pendingFinalizeTasks.clear();
-	}
-
-	#settleTask(task, error, value) {
-		settleTask(task, error, value, this.#metrics, { resetRowParser: true });
 	}
 }
