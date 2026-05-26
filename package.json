@@ -1,8 +1,8 @@
 {
     "name": "sqlite-executor",
-    "version": "3.4.1",
+    "version": "1.0.0",
     "private": false,
-    "description": "A wrapper for SQLite3 with a focus on simplicity and ease of use.",
+    "description": "SQLite executor for Node.js",
     "sideEffects": false,
     "files": [
         "dist"
