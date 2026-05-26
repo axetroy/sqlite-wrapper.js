@@ -28,14 +28,6 @@ export { VALID_TRANSACTION_MODES } from "./transaction/transaction.js";
 export { DEFAULT_STATEMENT_TIMEOUT, createTimeoutError } from "./utils/timeout.js";
 
 /**
- * SQL 工具函数。
- * - `escapeValue`：对值进行 SQL 转义
- * - `interpolateSQL`：将参数插值到 SQL 中（带转义）
- * - `normalizeSQL`：规范化 SQL，移除多余空白
- */
-export { escapeValue, interpolateSQL, normalizeSQL } from "./utils.js";
-
-/**
  * 在系统 PATH 中查找可执行文件。
  */
 export { which } from "./which.js";

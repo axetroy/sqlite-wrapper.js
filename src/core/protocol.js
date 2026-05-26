@@ -1,4 +1,4 @@
-import { normalizeSQL } from "../utils.js";
+import { normalizeSQL } from "../utils/normalize.js";
 import { TOKEN_COLUMN } from "../constants.js";
 
 export { TOKEN_COLUMN } from "../constants.js";

@@ -1,4 +1,4 @@
-import { normalizeSQL } from "../utils.js";
+import { normalizeSQL } from "./normalize.js";
 
 /** 默认 SQL 超时时间（毫秒） */
 export const DEFAULT_STATEMENT_TIMEOUT = 30_000;
