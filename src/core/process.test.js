@@ -100,4 +100,38 @@ describe("ProcessManager", () => {
 		assert.ok(proc2.pid > 0);
 		assert.notEqual(proc1.pid, proc2.pid);
 	});
+
+	test("start 时 binary 路径为空抛出错误", () => {
+		const pm = new ProcessManager({ binary: "", database: ":memory:" });
+		assert.throws(() => pm.start(), {
+			message: /sqlite3 binary path is empty/,
+		});
+	});
+
+	test("start 时 binary 文件不存在抛出错误", () => {
+		const pm = new ProcessManager({ binary: "/nonexistent/path", database: ":memory:" });
+		assert.throws(() => pm.start(), {
+			message: /sqlite3 binary not found/,
+		});
+	});
+
+	test("gracefulShutdown 未启动时 no-op", async () => {
+		const pm = createPM();
+		await pm.gracefulShutdown();
+	});
+
+	test("gracefulShutdown 发送 .quit 正常退出进程", async () => {
+		const pm = createPM();
+		const proc = pm.start();
+		assert.equal(proc.killed, false);
+
+		await pm.gracefulShutdown();
+
+		// close 事件已触发，进程应已退出
+		assert.ok(proc.exitCode !== null || proc.signalCode !== null);
+
+		// kill 后清理完成
+		pm.kill();
+		assert.equal(pm.process, null);
+	});
 });
