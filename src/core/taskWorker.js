@@ -2,6 +2,7 @@ import { ProcessManager } from "./process.js";
 import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRow, buildBatchPayload } from "./protocol.js";
+import { generateToken } from "../utils/token.js";
 import { createTimeoutError } from "../utils/timeout.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { DEFAULT_BATCH_SIZE } from "../constants.js";
@@ -137,7 +138,19 @@ export class TaskWorker {
 
 		const now = performance.now();
 
-		const payload = buildBatchPayload(batch);
+		// WAL batch sentinel 合并：所有 execute 任务共享一个 batchToken，
+		// 仅发一个 sentinel，减少 ~67% JSON 解析
+		const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
+		let payload;
+		if (useWalBatch) {
+			const batchToken = generateToken();
+			for (const task of batch) {
+				task.token = batchToken;
+			}
+			payload = buildBatchPayload(batch, { batchToken });
+		} else {
+			payload = buildBatchPayload(batch);
+		}
 
 		for (const task of batch) {
 			task.startTime = now;
@@ -167,14 +180,21 @@ export class TaskWorker {
 			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
-			if (task.stderrText) {
-				this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-				this.#pumpQueue();
-				return;
+			// WAL batch sentinel 合并：
+			// 当 inflight 中后续任务共享同一 token，说明是 batch 批量，需全部出队
+			const completed = [task];
+			while (this.#inflightTasks.length > 0 && this.#inflightTasks[0].token === task.token) {
+				const t = this.#inflightTasks.shift();
+				clearTimeout(t.timer);
+				completed.push(t);
 			}
 
-			if (task.consumerError) {
-				this.#settleTask(task, task.consumerError, undefined);
+			// WAL batch：任一 consumerError 失败整个 batch
+			const ce = completed.find(t => t.consumerError);
+			if (ce) {
+				for (const t of completed) {
+					this.#settleTask(t, ce.consumerError, undefined);
+				}
 				this.#pumpQueue();
 				return;
 			}
@@ -182,7 +202,9 @@ export class TaskWorker {
 			// stderr 和 stdout 是独立的 OS 管道，data 事件触发顺序无法保证。
 			// 延迟一帧再 finalize，给 stderr 一个事件循环周期的时间到达。
 			// 多个 task 共享同一个 setImmediate，减少事件循环开销。
-			this.#pendingFinalizeTasks.add(task);
+			for (const t of completed) {
+				this.#pendingFinalizeTasks.add(t);
+			}
 			this.#scheduleFinalizeCheck();
 			this.#pumpQueue();
 			return;
