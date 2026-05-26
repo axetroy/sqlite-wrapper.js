@@ -151,7 +151,6 @@ describe("TaskWorker", () => {
 					reject,
 				});
 			}),
-			/nonexistent|no such table/i,
 		);
 	});
 

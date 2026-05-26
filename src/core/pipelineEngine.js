@@ -179,12 +179,10 @@ export class PipelineEngine {
 			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
-			if (task.stderrText) {
-				this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-				this.#pumpQueue();
-				return;
-			}
-
+			// 无论 stderrText 是否为空，都走 pendingFinalize 延迟结算。
+			// 原因：Windows 上 sqlite3 的 stderr 输出可能被 OS pipe 拆分为多个 chunk，
+			// 若在此处立即 reject，后续到达的 stderr chunk 会丢失或被错误地配给下一个 inflight 任务。
+			// 通过 pendingFinalize + setImmediate 给 stderr chunk 留足时间到达。
 			if (task.consumerError) {
 				this.#settleTask(task, task.consumerError, undefined);
 				this.#pumpQueue();
@@ -214,7 +212,9 @@ export class PipelineEngine {
 	 * @param {string} chunk
 	 */
 	handleStderrChunk(chunk) {
-		const task = this.#inflightTasks[0] ?? this.#pendingFinalizeTasks.values().next().value;
+		// 优先匹配 pendingFinalize 任务，确保延迟到达的 stderr chunk
+		// 被正确归因到原始任务，而非下一个 inflight 任务。
+		const task = this.#pendingFinalizeTasks.values().next().value ?? this.#inflightTasks[0];
 		if (!task) {
 			this.#logger?.error?.(String(chunk).trim());
 			return;
