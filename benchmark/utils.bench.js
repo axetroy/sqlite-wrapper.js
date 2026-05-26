@@ -1,7 +1,6 @@
 import { performance } from "node:perf_hooks";
 
-import { escapeValue, interpolateSQL } from "../src/index.js";
-import { normalizeSQL } from "../src/utils.js";
+import { escapeValue, interpolateSQL, normalizeSQL } from "../src/index.js";
 
 const ITERATIONS = 200000;
 

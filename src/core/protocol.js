@@ -1,0 +1,62 @@
+import { normalizeSQL } from "../utils/normalize.js";
+import { TOKEN_COLUMN } from "../constants.js";
+
+export { TOKEN_COLUMN } from "../constants.js";
+
+/**
+ * 构建发送给 sqlite3 进程的完整载荷。
+ * 在原始 SQL 末尾追加一条 sentinel 查询，用于标记该任务输出的结束。
+ *
+ * @param {string} sql - 要执行的 SQL 语句（已规范化时设 skipNormalize=true）
+ * @param {string} token - 唯一 sentinel token
+ * @param {{ skipNormalize?: boolean }} [options]
+ * @returns {string} 追加了 sentinel 查询后的完整载荷
+ */
+export function buildPayload(sql, token, { skipNormalize = false } = {}) {
+	const normalized = skipNormalize ? sql : normalizeSQL(sql);
+	const suffix = normalized.endsWith(";") ? "" : ";";
+	// 模板字面量在 V8 中会优化为 join，保持原状即可
+	return `${normalized}${suffix}\nSELECT '${token}' AS ${TOKEN_COLUMN};\n`;
+}
+
+/**
+ * 将一批任务合并为单个发送给 sqlite3 进程的载荷字符串。
+ * 由 PipelineEngine 和 TaskWorker 共享，避免 25 行重复 payload 构建逻辑。
+ *
+ * 如果全是 execute 类型且数量 > 1，自动使用 WAL 批量优化：
+ * 将多条 INSERT/UPDATE 用 BEGIN/COMMIT 包裹后再追加各自的 sentinel token。
+ *
+ * @param {Array<{ kind: string, sql: string, token: string }>} batch
+ * @returns {string}
+ */
+export function buildBatchPayload(batch) {
+	const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
+	if (useWalBatch) {
+		const parts = ["BEGIN;\n"];
+		for (const task of batch) {
+			parts.push(task.sql, "\n");
+		}
+		parts.push("COMMIT;\n");
+		for (const task of batch) {
+			parts.push(`SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`);
+		}
+		return parts.join("");
+	}
+
+	const parts = [];
+	for (const task of batch) {
+		parts.push(buildPayload(task.sql, task.token, { skipNormalize: true }));
+	}
+	return parts.join("");
+}
+
+/**
+ * 检查解析出的 JSON 行是否为当前任务的 sentinel 结束标记行。
+ *
+ * @param {unknown} value - 已解析的 JSON 值
+ * @param {string} token - 当前任务的唯一 token
+ * @returns {boolean}
+ */
+export function isSentinelRow(value, token) {
+	return Array.isArray(value) && value.length === 1 && value[0]?.[TOKEN_COLUMN] === token;
+}

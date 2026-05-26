@@ -3,7 +3,7 @@ exports[`测试 CJS 输出 1`] = `
 > cjs@1.0.0 test
 > node index.cjs
 
-[Function: SQLiteWrapper]
+[Function: SQLiteExecutor]
 
 `;
 
@@ -12,6 +12,6 @@ exports[`测试 ESM 输出 1`] = `
 > esm@1.0.0 test
 > node index.mjs
 
-[Function: SQLiteWrapper]
+[Function: SQLiteExecutor]
 
 `;

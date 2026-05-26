@@ -1,8 +1,8 @@
 {
-    "name": "sqlite-wrapper.js",
-    "version": "3.4.2",
+    "name": "sqlite-executor",
+    "version": "1.0.0",
     "private": false,
-    "description": "A wrapper for SQLite3 with a focus on simplicity and ease of use.",
+    "description": "SQLite executor for Node.js",
     "sideEffects": false,
     "files": [
         "dist"
@@ -27,9 +27,10 @@
         }
     },
     "scripts": {
-        "test": "node --test **/*.test.js",
-        "test:update-snapshots": "node --test-update-snapshots --test **/*.test.js",
+        "test": "node --test \"src/**/*.test.js\" \"src/*.test.js\"",
+        "test:update-snapshots": "node --test-update-snapshots --test \"src/**/*.test.js\" \"src/*.test.js\"",
         "benchmark": "node benchmark/index.bench.js",
+        "benchmark:rw-split": "node benchmark/rw-split.bench.js",
         "benchmark:queue": "node benchmark/queue.bench.js",
         "benchmark:utils": "node benchmark/utils.bench.js",
         "benchmark:process-stream": "node --expose-gc benchmark/process-stream.bench.js",

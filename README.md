@@ -1,517 +1,311 @@
-# sqlite-wrapper.js
+# sqlite-executor
 
 [![Badge](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/en_US)
 [![LICENSE](https://img.shields.io/badge/license-Anti%20996-blue.svg?style=flat-square)](https://github.com/996icu/996.ICU/blob/master/LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E=18-blue.svg?style=flat-square)
-[![npm version](https://badge.fury.io/js/sqlite-wrapper.js.svg)](https://badge.fury.io/js/sqlite-wrapper.js)
+[![npm version](https://badge.fury.io/js/sqlite-executor.svg)](https://badge.fury.io/js/sqlite-executor)
 ![CI](https://github.com/axetroy/sqlite-wrapper.js/actions/workflows/build.yml/badge.svg)
 
-A lightweight wrapper for SQLite3 with a focus on simplicity and ease of use.
-
-It uses the SQLite3 executable file for database operations and it's **zero-dependencies**.
+A lightweight, zero-dependency SQLite wrapper for Node.js that communicates with the `sqlite3` CLI via stdin/stdout — no native addons, no `node-gyp`, no ABI headaches.
 
 ## Features
 
-- 🚀 **Zero dependencies** - No native bindings required
-- 📦 **Uses SQLite3 CLI** - Works with the SQLite3 command-line executable
-- 🔒 **Automatic SQL escaping** - Built-in parameter escaping to prevent SQL injection
-- 📝 **TypeScript support** - Full TypeScript type definitions included
-- 🔄 **Promise-based API** - Modern async/await interface
-- 📦 **Dual module support** - Works with both ESM and CommonJS
-- 🔐 **Serialized transactions** - `transaction()` wraps work in `BEGIN … COMMIT / ROLLBACK` and serializes concurrent callers
-- 🏷️ **Exclusive zones** - `exclusive()` provides a serialized critical section without the overhead of a SQLite transaction
+- 🚀 **Zero native dependencies** — pure JavaScript, no compilation needed
+- ⚡ **Long-lived process** — single `sqlite3` process for the entire app lifecycle
+- 🔄 **Promise-based API** — `execute()`, `query()`, `stream()`
+- 📦 **Async Iterator support** — `for await (const row of db.stream(sql))`
+- 🔐 **Transactions** — automatic `BEGIN … COMMIT / ROLLBACK` with concurrent caller serialization
+- 📊 **Read/Write Split** — dedicated reader pool for concurrent read queries
+- ⏱️ **Timeout control** — per-statement timeout with process-level failure recovery
+- 🔁 **Auto-restart** — crashed process restarts automatically
+- 📈 **Runtime metrics** — QPS, avg query time, timeout count, process restarts
+- 📝 **Full TypeScript types** — included
+- 📦 **Dual module** — ESM + CommonJS
 
 ## Requirements
 
-- Node.js >= 18 (tested on Node.js 22)
-- SQLite3 executable installed on your system
+- Node.js >= 18
+- `sqlite3` CLI executable available on the system
 
 ## Installation
 
 ```bash
-npm install sqlite-wrapper.js --save
-```
-
-or using yarn:
-
-```bash
-yarn add sqlite-wrapper.js
+npm install sqlite-executor --save
 ```
 
 ## Quick Start
 
 ```js
-import { SQLiteWrapper } from "sqlite-wrapper.js";
+import { SQLiteExecutor } from "sqlite-executor";
 
-// Initialize the sqlite process
-const sqlite = new SQLiteWrapper("/path/to/sqlite3", { dbPath: "/path/to/database.db" });
+const db = new SQLiteExecutor({ database: "./app.db" });
 
-// Create a table
-await sqlite.exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)");
+await db.execute(`CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT
+)`);
 
-// Insert data
-await sqlite.exec("INSERT INTO users (name) VALUES (?)", ["Alice"]);
-await sqlite.exec("INSERT INTO users (name) VALUES (?)", ["Bob"]);
+await db.execute("INSERT INTO users (name) VALUES (?)", ["Alice"]);
+await db.execute("INSERT INTO users (name) VALUES (?)", ["Bob"]);
 
-// Query data
-const result = await sqlite.query("SELECT * FROM users");
-console.log(result); // Output: [ { id: 1, name: 'Alice' }, { id: 2, name: 'Bob' } ]
+const rows = await db.query("SELECT * FROM users ORDER BY id ASC");
+console.log(rows);
+// [ { id: 1, name: 'Alice' }, { id: 2, name: 'Bob' } ]
 
-// Update data
-await sqlite.exec("UPDATE users SET name = ? WHERE id = ?", ["Charlie", 1]);
-const results = await sqlite.query("SELECT * FROM users WHERE id = ?", [1]);
-console.log(results); // Output: [ { id: 1, name: 'Charlie' } ]
-
-// Update with affected row count
-const { changes } = await sqlite.run("UPDATE users SET name = ? WHERE id = ?", ["Dave", 1]);
-console.log(changes); // Output: 1
-
-// Close the SQLite3 process
-await sqlite.close();
+await db.close();
 ```
 
 ## API Reference
 
-### `SQLiteWrapper`
-
-The main class for interacting with SQLite databases.
+### `SQLiteExecutor`
 
 #### Constructor
 
 ```js
-new SQLiteWrapper(exePath, options?)
+new SQLiteExecutor(options?)
 ```
 
-| Parameter          | Type               | Description                                                                                 |
-| ------------------ | ------------------ | ------------------------------------------------------------------------------------------- |
-| `exePath`          | `string`           | Path to the SQLite3 executable                                                              |
-| `options.dbPath`   | `string`           | (Optional) Path to the SQLite database file. If not provided, an in-memory database is used |
-| `options.logger`   | `Logger`           | (Optional) Logger instance for debugging                                                    |
-| `options.onTiming` | `(timing) => void` | (Optional) Per-SQL timing callback for queue/run/total metrics                              |
-| `options.maxInFlight` | `number`        | (Optional, default `128`) Max inflight statements per dispatch cycle                        |
-| `options.maxBatchChars` | `number`      | (Optional, default `131072`) Max SQL payload size per process write                         |
+| Option              | Type      | Default        | Description                                              |
+| ------------------- | --------- | -------------- | -------------------------------------------------------- |
+| `binary`            | `string`  | `"sqlite3"`    | Path to the `sqlite3` executable                          |
+| `database`          | `string`  | `":memory:"`   | Database file path                                       |
+| `logger`            | `Logger`  | —              | Optional logger (`log`, `info`, `warn`, `error`, `debug`) |
+| `statementTimeout`  | `number`  | `30000`        | Per-statement timeout in milliseconds                     |
+| `autoRestart`       | `boolean` | `true`         | Auto-restart on process crash                             |
+| `poolSize`          | `number`  | `0`            | Reader pool size (read/write split, file DB only)         |
+| `metrics`           | `Metrics` | auto-created   | Shared metrics instance                                   |
 
-#### Methods
+#### `db.execute(sql, params?, options?)`
 
-##### `get pendingQueries()`
-
-Returns the number of pending SQL queries in the queue.
-
-##### `exec(sql, params?)`
-
-Executes a SQL statement without returning results. Use for `CREATE`, `INSERT`, `UPDATE`, `DELETE` operations when you don't need execution metadata.
+Executes a SQL statement without returning rows. Use for `CREATE`, `INSERT`, `UPDATE`, `DELETE`.
 
 ```js
-await sqlite.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
-await sqlite.exec("INSERT INTO users (name) VALUES (?)", ["Alice"]);
+await db.execute("CREATE TABLE t (id INTEGER)");
+await db.execute("INSERT INTO t (id) VALUES (?)", [1]);
+await db.execute("UPDATE t SET id = ? WHERE id = ?", [2, 1]);
 ```
 
-| Parameter | Type     | Description                                              |
-| --------- | -------- | -------------------------------------------------------- |
-| `sql`     | `string` | SQL statement to execute                                 |
-| `params`  | `any[]`  | (Optional) Parameters to substitute for `?` placeholders |
+#### `db.query(sql, params?, options?)`
 
-##### `run(sql, params?)`
-
-Executes a write SQL statement and returns execution metadata. Use for `INSERT`, `UPDATE`, or `DELETE` when you need to know how many rows were affected or the rowid of the inserted row.
+Executes a query and returns all result rows as an array.
 
 ```js
-const { changes, lastInsertRowid } = await sqlite.run("INSERT INTO users (name) VALUES (?)", ["Alice"]);
-console.log(changes);        // 1
-console.log(lastInsertRowid); // 1 (the new row's rowid)
-
-const { changes: updated } = await sqlite.run("UPDATE users SET name = ? WHERE id = ?", ["Bob", 1]);
-console.log(updated); // 1
+const rows = await db.query("SELECT * FROM users WHERE id = ?", [1]);
+// [ { id: 1, name: 'Alice' } ]
 ```
 
-| Parameter      | Type                                            | Description                                              |
-| -------------- | ----------------------------------------------- | -------------------------------------------------------- |
-| `sql`          | `string`                                        | SQL statement to execute                                 |
-| `params`       | `any[]`                                         | (Optional) Parameters to substitute for `?` placeholders |
-| **Returns**    | `Promise<{ changes: number, lastInsertRowid: number }>` | Rows affected and last inserted rowid      |
+#### `db.stream(sql, params?, options?)`
 
-##### `query<T>(sql, params?)`
-
-Executes a SQL query and returns the results as an array of objects.
+Returns an `AsyncIterable` for `for await` consumption.
 
 ```js
-const users = await sqlite.query("SELECT * FROM users WHERE id = ?", [1]);
-// Returns: [{ id: 1, name: 'Alice' }]
+for await (const row of db.stream("SELECT * FROM huge_table")) {
+  process(row);
+}
 ```
 
-| Parameter   | Type           | Description                                              |
-| ----------- | -------------- | -------------------------------------------------------- |
-| `sql`       | `string`       | SQL query to execute                                     |
-| `params`    | `any[]`        | (Optional) Parameters to substitute for `?` placeholders |
-| **Returns** | `Promise<T[]>` | Array of result objects                                  |
+Supports early `break` — the underlying process is not affected.
 
-##### `close()`
+#### `db.transaction(fn, options?)`
 
-Closes the SQLite3 process. Always call this when done with the database.
+Executes a callback inside a SQLite transaction (`BEGIN` / `COMMIT` / `ROLLBACK`). Concurrent calls are serialized — they never interleave.
 
 ```js
-await sqlite.close();
+await db.transaction(async (tx) => {
+  await tx.execute("INSERT INTO accounts (id, balance) VALUES (?, ?)", [1, 100]);
+  await tx.execute("INSERT INTO accounts (id, balance) VALUES (?, ?)", [2, 200]);
+}, "IMMEDIATE");
 ```
 
-##### `exclusive(fn)`
+Inside the transaction callback, use the `tx` handle (`execute`, `query`, `stream`) — bare `db.*` calls would break transactional isolation.
 
-Runs `fn` inside a serialized exclusive zone. While the zone is active, **only SQL issued through the provided `zone` handle executes**; all other SQL (bare `exec`/`run`/`query` calls or SQL from another `exclusive`/`transaction` call) is automatically deferred and re-enqueued once the zone ends.
+| Option | Type | Default | Description |
+| ------ | ---- | ------- | ----------- |
+| `mode` | `"DEFERRED"` \| `"IMMEDIATE"` \| `"EXCLUSIVE"` | `"DEFERRED"` | SQLite transaction lock mode |
 
-Concurrent `exclusive()` calls are automatically serialized — they never interleave.
+#### `db.close()`
+
+Closes the sqlite3 process and rejects all pending tasks.
 
 ```js
-const result = await sqlite.exclusive(async (zone) => {
-	const [row] = await zone.query("SELECT balance FROM accounts WHERE id = ?", [1]);
-	const newBalance = row.balance - 100;
-	await zone.exec("UPDATE accounts SET balance = ? WHERE id = ?", [newBalance, 1]);
-	return newBalance;
-});
+await db.close();
 ```
 
-> **Do not** call `db.exclusive()` or `db.transaction()` recursively inside the callback — this will deadlock.
-
-| Parameter | Type | Description |
-| --------- | ---- | ----------- |
-| `fn` | `(zone: ExclusiveZone) => Promise<T>` | Async callback receiving a restricted `zone` handle (`exec`, `run`, `query`) |
-| **Returns** | `Promise<T>` | Value returned by `fn` |
-
-##### `transaction(fn, type?)`
-
-Runs `fn` inside a serialized SQLite transaction (`BEGIN … COMMIT`). If `fn` throws, the transaction is automatically rolled back and the error is re-thrown.
-
-Built on top of `exclusive()` — concurrent calls are serialized automatically.
+`SQLiteExecutor` also implements `Symbol.asyncDispose` and `Symbol.dispose`:
 
 ```js
-const { lastInsertRowid } = await sqlite.transaction(async (tx) => {
-	await tx.exec("INSERT INTO orders (user_id) VALUES (?)", [42]);
-	return tx.run("INSERT INTO order_items (order_id, product) VALUES (last_insert_rowid(), ?)", ["Widget"]);
-});
+// Using explicit resource management (ES2025)
+await using db = new SQLiteExecutor({ database: "./app.db" });
 ```
 
-| Parameter | Type | Description |
-| --------- | ---- | ----------- |
-| `fn` | `(tx: Transaction) => Promise<T>` | Async callback receiving a restricted `tx` handle (`exec`, `run`, `query`) |
-| `type` | `"DEFERRED" \| "IMMEDIATE" \| "EXCLUSIVE"` | (Optional, default `"DEFERRED"`) SQLite transaction isolation level |
-| **Returns** | `Promise<T>` | Value returned by `fn` |
+#### `db.pendingStatements`
 
-### Utility Functions
+Returns the total number of pending statements across the writer queue, reader pool, and deferred queue.
 
-#### `escapeValue(value)`
+#### `db.readerPool`
 
-Escapes a single value for safe use in SQL queries.
+Returns the `ReaderPool` instance when `poolSize > 0` and the database is a file DB. Returns `null` otherwise.
+
+#### `db.metrics`
+
+Returns the `Metrics` instance. See below.
+
+### `Metrics`
+
+Runtime metrics collector, accessible via `db.metrics`.
 
 ```js
-import { escapeValue } from "sqlite-wrapper.js";
-
-escapeValue("Alice"); // "'Alice'"
-escapeValue("O'Brien"); // "'O''Brien'"
-escapeValue(42); // "42"
-escapeValue(null); // "NULL"
-escapeValue(true); // "TRUE"
-escapeValue(new Date()); // "'2024-01-15T10:30:00.000Z'" (ISO 8601 format)
+const stats = db.metrics.snapshot();
+console.log(stats);
+// {
+//   tasksTotal: 42,
+//   tasksSuccess: 40,
+//   tasksFailed: 2,
+//   tasksTimeout: 1,
+//   processRestarts: 0,
+//   executeCount: 20,
+//   queryCount: 22,
+//   streamCount: 0,
+//   avgQueryTime: 15.3,   // ms
+//   qps: 8.2,             // queries per second
+//   uptime: 5.1,          // seconds
+// }
 ```
 
-#### `interpolateSQL(sql, params)`
+| Method / Getter        | Returns        | Description                          |
+| ---------------------- | -------------- | ------------------------------------ |
+| `snapshot()`           | `object`       | All metrics as a plain object         |
+| `tasksTotal`           | `number`       | Total tasks enqueued                  |
+| `tasksSuccess`         | `number`       | Successfully completed tasks          |
+| `tasksFailed`          | `number`       | Failed tasks                          |
+| `tasksTimeout`         | `number`       | Timed-out tasks                       |
+| `processRestarts`      | `number`       | sqlite3 process restarts              |
+| `executeCount`         | `number`       | `execute` calls                       |
+| `queryCount`           | `number`       | `query` calls                         |
+| `streamCount`          | `number`       | `stream` calls                        |
 
-Interpolates parameters into a SQL string.
+Multiple executors / workers can share the same `Metrics` instance:
 
 ```js
-import { interpolateSQL } from "sqlite-wrapper.js";
+import { SQLiteExecutor, Metrics } from "sqlite-executor";
 
-const sql = interpolateSQL("SELECT * FROM users WHERE name = ? AND age = ?", ["Alice", 25]);
-// Returns: "SELECT * FROM users WHERE name = 'Alice' AND age = 25"
+const metrics = new Metrics();
+
+const db1 = new SQLiteExecutor({ database: "./a.db", metrics });
+const db2 = new SQLiteExecutor({ database: "./b.db", metrics });
 ```
-
-## Supported Parameter Types
-
-The following types are supported for SQL parameters:
-
-| Type                 | SQL Output                              |
-| -------------------- | --------------------------------------- |
-| `string`             | `'value'` (with proper escaping)        |
-| `number`             | `123`                                   |
-| `bigint`             | `123`                                   |
-| `boolean`            | `TRUE` or `FALSE`                       |
-| `null` / `undefined` | `NULL`                                  |
-| `Date`               | `'YYYY-MM-DDTHH:mm:ss.sssZ'` (ISO 8601) |
-
-## Usage Examples
-
-### In-Memory Database
-
-```js
-import { SQLiteWrapper } from "sqlite-wrapper.js";
-
-// Create an in-memory database (no dbPath)
-const sqlite = new SQLiteWrapper("/usr/bin/sqlite3");
-
-await sqlite.exec("CREATE TABLE temp_data (id INTEGER, value TEXT)");
-await sqlite.exec("INSERT INTO temp_data VALUES (?, ?)", [1, "test"]);
-const data = await sqlite.query("SELECT * FROM temp_data");
-
-await sqlite.close();
-```
-
-### Using with Logger
-
-```js
-import { SQLiteWrapper } from "sqlite-wrapper.js";
-
-const logger = {
-	log: console.log,
-	info: console.info,
-	warn: console.warn,
-	error: console.error,
-	debug: console.debug,
-};
-
-const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", {
-	dbPath: "./mydb.sqlite",
-	logger: logger,
-});
-```
-
-### Using with Timing Callback
-
-```js
-import { SQLiteWrapper } from "sqlite-wrapper.js";
-
-const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", {
-	onTiming: (timing) => {
-		// queueMs: time spent waiting in queue before being dispatched
-		// runMs: time spent after dispatch until completion
-		// totalMs: end-to-end latency for this SQL task
-		console.log("[SQL Timing]", timing.status, {
-			sql: timing.sql,
-			isQuery: timing.isQuery,
-			queueMs: timing.queueMs,
-			runMs: timing.runMs,
-			totalMs: timing.totalMs,
-		});
-	},
-});
-
-await sqlite.exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)");
-await sqlite.exec("INSERT INTO users (name) VALUES (?)", ["Alice"]);
-
-await sqlite.close();
-```
-
-### Performance Tuning Options
-
-```js
-import { SQLiteWrapper } from "sqlite-wrapper.js";
-
-const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", {
-	dbPath: "./mydb.sqlite",
-	maxInFlight: 256,
-	maxBatchChars: 256 * 1024,
-});
-```
-
-Use higher values only after benchmark validation in your workload.
 
 ### TypeScript Usage
 
 ```typescript
-import { SQLiteWrapper } from "sqlite-wrapper.js";
+import { SQLiteExecutor } from "sqlite-executor";
 
 interface User {
-	id: number;
-	name: string;
-	email: string;
+  id: number;
+  name: string;
 }
 
-const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", { dbPath: "./users.db" });
+const db = new SQLiteExecutor({ database: "./users.db" });
 
-await sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL
-  )
-`);
+await db.execute(`CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL
+)`);
 
-await sqlite.exec("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"]);
-
-// Type-safe query results
-const users = await sqlite.query<User>("SELECT * FROM users");
-// users is of type User[]
-
-await sqlite.close();
+const users = await db.query<User>("SELECT * FROM users");
+// users: User[]
 ```
 
-### CommonJS Usage
+## Advanced Usage
+
+### Read/Write Split with Reader Pool
+
+For file-based databases, you can enable a reader pool for concurrent read queries:
 
 ```js
-const { SQLiteWrapper } = require("sqlite-wrapper.js");
-
-const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", { dbPath: "./db.sqlite" });
-
-// ... use sqlite
-```
-
-### Multiple Statements in Single Execution
-
-You can execute multiple SQL statements in a single `exec()` call. Parameters are substituted sequentially across all statements:
-
-```js
-import { SQLiteWrapper } from "sqlite-wrapper.js";
-
-const sqlite = new SQLiteWrapper("/usr/bin/sqlite3");
-
-// The first ? is replaced with "Alice", the second ? with "Bob"
-await sqlite.exec(
-	`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT
-  );
-
-  INSERT INTO users (name) VALUES (?);
-  INSERT INTO users (name) VALUES (?);
-`,
-	["Alice", "Bob"],
-);
-
-await sqlite.close();
-```
-
-### Using Transactions
-
-`transaction()` wraps a block of SQL in `BEGIN … COMMIT / ROLLBACK`. Concurrent callers are automatically serialized so transactions never interleave.
-
-```js
-import { SQLiteWrapper } from "sqlite-wrapper.js";
-
-const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", { dbPath: "./bank.db" });
-
-await sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, balance INTEGER);
-  INSERT INTO accounts VALUES (1, 1000);
-  INSERT INTO accounts VALUES (2, 500);
-`);
-
-// Transfer 200 from account 1 to account 2 atomically
-await sqlite.transaction(async (tx) => {
-	await tx.exec("UPDATE accounts SET balance = balance - ? WHERE id = ?", [200, 1]);
-	await tx.exec("UPDATE accounts SET balance = balance + ? WHERE id = ?", [200, 2]);
+const db = new SQLiteExecutor({
+  database: "./app.db",
+  poolSize: 3,   // 3 reader processes
 });
-
-// Use IMMEDIATE to acquire a write lock up-front
-await sqlite.transaction(async (tx) => {
-	const [row] = await tx.query("SELECT balance FROM accounts WHERE id = ?", [1]);
-	await tx.exec("UPDATE accounts SET balance = ? WHERE id = ?", [row.balance * 2, 1]);
-}, "IMMEDIATE");
-
-await sqlite.close();
 ```
 
-### Using Exclusive Zones
+Writes always go through the main writer process. Reads (`SELECT`, `WITH`, `VALUES`, `EXPLAIN`) are dispatched to a pool of `TaskWorker` instances via round-robin. This prevents long-running reads from blocking writes.
 
-`exclusive()` gives you a serialized critical section without the overhead of a SQLite transaction. Use it when you need to read-then-write atomically at the application level.
+### Parameterized Queries
+
+SQL parameters use `?` placeholders with automatic escaping:
 
 ```js
-import { SQLiteWrapper } from "sqlite-wrapper.js";
-
-const sqlite = new SQLiteWrapper("/usr/bin/sqlite3", { dbPath: "./app.db" });
-
-// Safe increment even if called concurrently
-async function incrementCounter(id) {
-	return sqlite.exclusive(async (zone) => {
-		const [row] = await zone.query("SELECT count FROM counters WHERE id = ?", [id]);
-		const next = (row?.count ?? 0) + 1;
-		await zone.exec("UPDATE counters SET count = ? WHERE id = ?", [next, id]);
-		return next;
-	});
-}
-
-// Both calls are serialized — the second waits for the first to finish
-await Promise.all([incrementCounter(1), incrementCounter(1)]);
-
-await sqlite.close();
+await db.execute("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"]);
+const rows = await db.query("SELECT * FROM users WHERE email = ?", ["alice@example.com"]);
 ```
 
-## Why Use This Library?
+Supported parameter types:
 
-Unlike other SQLite libraries for Node.js that require native bindings (like `better-sqlite3` or `sqlite3`), this library:
+| Type                 | SQL Output                              |
+| -------------------- | --------------------------------------- |
+| `string`             | `'value'` (properly escaped)            |
+| `number`             | `123`                                   |
+| `bigint`             | `123`                                   |
+| `boolean`            | `TRUE` / `FALSE`                        |
+| `null` / `undefined` | `NULL`                                  |
+| `Date`               | `'2024-01-15T10:30:00.000Z'` (ISO 8601) |
 
-- **No compilation required** - Works immediately without building native modules
-- **Cross-platform** - Works anywhere SQLite3 CLI is available
-- **Simple deployment** - No need to worry about native dependencies in Docker/CI environments
-- **Lightweight** - Zero npm dependencies
+### Error Handling
+
+SQL errors from sqlite3 are captured and the task promise is rejected:
+
+```js
+try {
+  await db.query("SELECT * FROM nonexistent");
+} catch (err) {
+  console.log(err.message);  // "Parse error near line 1: no such table: nonexistent"
+}
+```
+
+Process crashes are handled automatically — the current task and all queued tasks are rejected, and a new process is spawned (if `autoRestart` is enabled, which is the default).
+
+### Using with Logger
+
+```js
+const db = new SQLiteExecutor({
+  database: "./app.db",
+  logger: {
+    log: console.log,
+    info: console.info,
+    warn: console.warn,
+    error: console.error,
+    debug: console.debug,
+  },
+});
+```
+
+### Streaming Large Result Sets
+
+```js
+for await (const row of db.stream("SELECT * FROM logs WHERE created_at > ?", [date])) {
+  sendToClient(row);
+}
+```
 
 ## Benchmarks
-
-The library includes comprehensive benchmarks to measure performance. Run them with:
 
 ```bash
 npm run benchmark
 ```
 
-This will test various operations including table creation, inserts, queries, updates, deletes, and JOIN operations. See the [benchmark directory](./benchmark/README.md) for more details.
+See the [benchmark directory](./benchmark/README.md) for details.
 
 ## Project Structure
 
 ```text
-src/         Core runtime implementation and public types
-benchmark/   Performance benchmark suites
-test/        Distribution-level integration tests
-script/      Utility scripts (for example sqlite binary download)
+src/         Source code
+benchmark/   Performance benchmarks
+script/      Utility scripts (e.g. sqlite binary download)
 fixtures/    CJS/ESM fixtures for packaging tests
-bin/         Downloaded sqlite binaries for local test/benchmark
+bin/         Downloaded sqlite3 binaries
 dist/        Build outputs
 ```
-
-## Naming and Maintenance Conventions
-
-- Keep public API surface in `src/index.js` and corresponding declarations in `src/index.d.ts`.
-- Keep internal queue logic isolated in `src/queue.js`.
-- Use `node:` protocol imports for built-in modules.
-- Prefer explicit option objects over positional boolean arguments.
-- Add tests for behavior changes in `src/index.test.js` before refactoring internals.
-
-## Performance Best Practices
-
-- Prefer transaction-wrapped write batches for heavy write workloads.
-- Add proper indexes for `UPDATE` and `WHERE` filters.
-- Use `onTiming` to distinguish queue pressure from execution bottlenecks.
-- Tune `maxInFlight` and `maxBatchChars` with benchmark data, not guesses.
-
-<details><summary>Apple M3 Pro Benchmark Results</summary>
-
-```
-================================================================================================================================
-SQLite Wrapper Benchmark Results
-================================================================================================================================
-Benchmark                                                                  Avg (ms)   Min (ms)   Max (ms)  Total (ms)    Ops/sec
---------------------------------------------------------------------------------------------------------------------------------
-Table Creation                                                                0.296      0.210      0.721      14.816    3374.69
-Single Row Insert                                                             0.324      0.208      2.436     324.119    3085.28
-Bulk Insert (100 rows with transaction)                                       1.997      1.729      2.699      19.968     500.80
-Simple SELECT (1000 rows)                                                     1.882      1.717      2.167     188.205     531.34
-SELECT with WHERE clause                                                      0.996      0.910      1.253      99.582    1004.19
-UPDATE Single Row                                                             0.177      0.019      0.355      88.517    5648.66
-DELETE Single Row                                                             0.294      0.173      3.665     147.141    3398.11
-JOIN Query (1000 orders, 100 customers)                                       2.146      2.072      2.330     107.278     466.08
-Transaction (5 inserts)                                                       0.351      0.275      0.576      35.134    2846.25
-100k Point Query by ID (100000 rows)                                          0.028      0.018      0.261      28.050   35651.01
-100k Range Query by Category (100000 rows)                                    0.240      0.214      0.282      48.072    4160.41
-100k Aggregate Query (100000 rows)                                           87.898     81.206    139.058    8789.809      11.38
-100k Single Row Update (100000 rows)                                          0.307      0.219      2.384     307.271    3254.45
-100k Batch Update 100 rows (100000 rows)                                      1.443      1.213      2.027     144.257     693.21
-100k Simple Commands (SELECT 1)                                            0.017037          -          -    1703.738   58694.47
-100k Sequential INSERT                                                     0.248893          -          -   24889.290    4017.79
-100k Sequential UPDATE                                                     0.247484          -          -   24748.373    4040.67
-20k Burst Enqueue INSERT (Promise.all)                                     0.008727          -          -     174.537  114588.86
-20k Sequential Enqueue INSERT (await loop)                                 0.019912          -          -     398.241   50220.84
-20k Chunked Enqueue INSERT (1000/chunk)                                    0.004907          -          -      98.138  203794.57
-20k Burst Enqueue UPDATE (Promise.all)                                     0.009929          -          -     198.575  100717.36
-================================================================================================================================
-```
-
-</summary>
-</details>
 
 ## License
 
