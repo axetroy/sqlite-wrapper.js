@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import { which } from "../which.js";
+
+/** @type {number} */
+const GRACEFUL_SHUTDOWN_TIMEOUT = 5_000;
 
 /**
  * 管理 sqlite3 子进程的生命周期。
@@ -11,6 +15,8 @@ export class ProcessManager {
 	#database;
 	#proc = null;
 	#initMode;
+	#writeBuffer = "";
+	#draining = false;
 
 	/**
 	 * @param {{ binary?: string, database?: string, initMode?: "wal" | "none" }} options
@@ -66,10 +72,54 @@ export class ProcessManager {
 
 	/**
 	 * 向子进程的 stdin 写入数据。
+	 * 当底层管道的写缓冲区满时（Windows 上管道缓冲区仅 4KB），
+	 * Node.js 的 write() 返回 false。此时将数据暂存在 #writeBuffer 中，
+	 * 等待 drain 事件触发后继续写入，以避免管道死锁。
 	 * @param {string} data
 	 */
 	write(data) {
-		this.#proc?.stdin?.write(data);
+		const stream = this.#proc?.stdin;
+		if (!stream) return;
+
+		if (this.#draining) {
+			this.#writeBuffer += data;
+			return;
+		}
+
+		const ok = stream.write(data);
+		if (!ok) {
+			this.#draining = true;
+			this.#writeBuffer += data;
+			stream.once("drain", () => {
+				this.#draining = false;
+				const buf = this.#writeBuffer;
+				this.#writeBuffer = "";
+				if (buf) this.write(buf);
+			});
+		}
+	}
+
+	/**
+	 * 优雅关闭：向子进程发送 ".quit" 命令并等待其自行退出。
+	 * 如果在超时时间内未退出，则强制 kill。
+	 * @returns {Promise<void>}
+	 */
+	async gracefulShutdown() {
+		const proc = this.#proc;
+		if (!proc) return;
+
+		const timer = setTimeout(() => {
+			this.kill();
+		}, GRACEFUL_SHUTDOWN_TIMEOUT);
+
+		try {
+			proc.stdin?.write(".quit\n");
+			await once(proc, "close");
+		} catch {
+			// 进程可能已被清理，忽略
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	/**
@@ -80,6 +130,8 @@ export class ProcessManager {
 		const proc = this.#proc;
 		if (!proc) return null;
 		this.#proc = null;
+		this.#writeBuffer = "";
+		this.#draining = false;
 		proc.stdout?.removeAllListeners();
 		proc.stderr?.removeAllListeners();
 		proc.removeAllListeners();

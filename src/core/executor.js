@@ -197,6 +197,7 @@ export class SQLiteExecutor {
 
 		this.#readerPool?.kill();
 
+		await this.#processManager.gracefulShutdown();
 		this.#processManager.kill();
 		try {
 			await once(this.#processManager.process, "close");
