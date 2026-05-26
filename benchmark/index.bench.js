@@ -216,7 +216,7 @@ async function main() {
 
 	// Benchmark 1: Table creation
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		let counter = 0;
 		results.push(
 			await benchmark(
@@ -232,7 +232,7 @@ async function main() {
 
 	// Benchmark 2: Single insert
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, age INTEGER)");
 		results.push(
 			await benchmark(
@@ -248,7 +248,7 @@ async function main() {
 
 	// Benchmark 3: Bulk insert (with transaction)
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("CREATE TABLE IF NOT EXISTS bulk_test (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)");
 		results.push(
 			await benchmark(
@@ -268,7 +268,7 @@ async function main() {
 
 	// Benchmark 4: Simple SELECT query
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price REAL)");
 		// Insert test data with transaction for efficiency
 		await sqlite.execute("BEGIN TRANSACTION");
@@ -290,7 +290,7 @@ async function main() {
 
 	// Benchmark 5: SELECT with WHERE clause
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		results.push(
 			await benchmark(
 				"SELECT with WHERE clause",
@@ -305,7 +305,7 @@ async function main() {
 
 	// Benchmark 6: UPDATE operation
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		results.push(
 			await benchmark(
 				"UPDATE Single Row",
@@ -321,7 +321,7 @@ async function main() {
 
 	// Benchmark 7: DELETE operation
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("CREATE TABLE IF NOT EXISTS temp_data (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT)");
 		// Pre-populate with data using transaction
 		await sqlite.execute("BEGIN TRANSACTION");
@@ -344,7 +344,7 @@ async function main() {
 
 	// Benchmark 8: Complex JOIN query
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute(`
 			CREATE TABLE IF NOT EXISTS orders (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -388,7 +388,7 @@ async function main() {
 
 	// Benchmark 9: Transaction with multiple operations
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL)");
 		results.push(
 			await benchmark(
@@ -408,7 +408,7 @@ async function main() {
 
 	// Benchmark 10: 100k-row table (query + update performance)
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		console.log(`Preparing 100k-row benchmark table (${LARGE_TABLE_ROW_COUNT} rows)...`);
 
 		await sqlite.execute("DROP TABLE IF EXISTS large_bench");
@@ -514,7 +514,7 @@ async function main() {
 
 	// Benchmark 11: digest 100k simple commands end-to-end
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		results.push(
 			await benchmarkWorkload(`100k Simple Commands (SELECT 1)`, SIMPLE_COMMAND_COUNT, async () => {
 				for (let i = 0; i < SIMPLE_COMMAND_COUNT; i++) {
@@ -527,7 +527,7 @@ async function main() {
 
 	// Benchmark 12: digest 100k inserts end-to-end
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("DROP TABLE IF EXISTS insert_100k_bench");
 		await sqlite.execute(`
 			CREATE TABLE insert_100k_bench (
@@ -549,7 +549,7 @@ async function main() {
 
 	// Benchmark 13: digest 100k updates end-to-end
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("DROP TABLE IF EXISTS update_100k_bench");
 		await sqlite.execute(`
 			CREATE TABLE update_100k_bench (
@@ -587,7 +587,7 @@ async function main() {
 
 	// Benchmark 14: burst enqueue tens-of-thousands inserts end-to-end
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("DROP TABLE IF EXISTS burst_enqueued_insert_bench");
 		await sqlite.execute(`
 			CREATE TABLE burst_enqueued_insert_bench (
@@ -617,7 +617,7 @@ async function main() {
 
 	// Benchmark 15: sequential enqueue tens-of-thousands inserts end-to-end
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("DROP TABLE IF EXISTS sequential_enqueued_insert_bench");
 		await sqlite.execute(`
 			CREATE TABLE sequential_enqueued_insert_bench (
@@ -647,7 +647,7 @@ async function main() {
 
 	// Benchmark 16: chunked enqueue tens-of-thousands inserts end-to-end
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("DROP TABLE IF EXISTS chunked_enqueued_insert_bench");
 		await sqlite.execute(`
 			CREATE TABLE chunked_enqueued_insert_bench (
@@ -690,7 +690,7 @@ async function main() {
 
 	// Benchmark 17: burst enqueue tens-of-thousands updates end-to-end
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 300_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPath, statementTimeout: 600_000 });
 		await sqlite.execute("DROP TABLE IF EXISTS burst_enqueued_update_bench");
 		await sqlite.execute(`
 			CREATE TABLE burst_enqueued_update_bench (
