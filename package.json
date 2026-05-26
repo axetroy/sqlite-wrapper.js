@@ -27,8 +27,8 @@
         }
     },
     "scripts": {
-        "test": "node --test \"src/**/*.test.js\" \"src/*.test.js\"",
-        "test:update-snapshots": "node --test-update-snapshots --test \"src/**/*.test.js\" \"src/*.test.js\"",
+        "test": "node script/run-tests.mjs",
+        "test:update-snapshots": "node script/run-tests.mjs --test-update-snapshots",
         "benchmark": "node benchmark/index.bench.js",
         "benchmark:rw-split": "node benchmark/rw-split.bench.js",
         "benchmark:queue": "node benchmark/queue.bench.js",
