@@ -1,6 +1,6 @@
 import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
-import { isSentinelRow, buildPayload, TOKEN_COLUMN } from "./protocol.js";
+import { isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { DEFAULT_BATCH_SIZE } from "../constants.js";
 
@@ -111,28 +111,7 @@ export class PipelineEngine {
 
 		const now = performance.now();
 
-		// 使用数组 join 而不是 += 构建 payload，减少大量中间 string 分配。
-		// 在高负载（百万级 SQL）下，每个 batch 的 payload 可能包含数十条 SQL，
-		// += 每次创建新字符串导致 O(n²) 级 GC 压力。
-		const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
-		let payload;
-		if (useWalBatch) {
-			const parts = [`BEGIN;\n`];
-			for (const task of batch) {
-				parts.push(task.sql, "\n");
-			}
-			parts.push("COMMIT;\n");
-			for (const task of batch) {
-				parts.push(`SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`);
-			}
-			payload = parts.join("");
-		} else {
-			const parts = [];
-			for (const task of batch) {
-				parts.push(buildPayload(task.sql, task.token, { skipNormalize: task.sqlNormalized }));
-			}
-			payload = parts.join("");
-		}
+		const payload = buildBatchPayload(batch);
 
 		for (const task of batch) {
 			task.startTime = now;

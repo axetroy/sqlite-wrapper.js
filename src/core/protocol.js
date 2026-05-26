@@ -20,6 +20,37 @@ export function buildPayload(sql, token, { skipNormalize = false } = {}) {
 }
 
 /**
+ * 将一批任务合并为单个发送给 sqlite3 进程的载荷字符串。
+ * 由 PipelineEngine 和 TaskWorker 共享，避免 25 行重复 payload 构建逻辑。
+ *
+ * 如果全是 execute 类型且数量 > 1，自动使用 WAL 批量优化：
+ * 将多条 INSERT/UPDATE 用 BEGIN/COMMIT 包裹后再追加各自的 sentinel token。
+ *
+ * @param {Array<{ kind: string, sql: string, token: string }>} batch
+ * @returns {string}
+ */
+export function buildBatchPayload(batch) {
+	const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
+	if (useWalBatch) {
+		const parts = ["BEGIN;\n"];
+		for (const task of batch) {
+			parts.push(task.sql, "\n");
+		}
+		parts.push("COMMIT;\n");
+		for (const task of batch) {
+			parts.push(`SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`);
+		}
+		return parts.join("");
+	}
+
+	const parts = [];
+	for (const task of batch) {
+		parts.push(buildPayload(task.sql, task.token, { skipNormalize: true }));
+	}
+	return parts.join("");
+}
+
+/**
  * 检查解析出的 JSON 行是否为当前任务的 sentinel 结束标记行。
  *
  * @param {unknown} value - 已解析的 JSON 值

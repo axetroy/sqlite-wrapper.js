@@ -1,7 +1,7 @@
 import { ProcessManager } from "./process.js";
 import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
-import { isSentinelRow, buildPayload, TOKEN_COLUMN } from "./protocol.js";
+import { isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { createTimeoutError } from "../utils/timeout.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { DEFAULT_BATCH_SIZE } from "../constants.js";
@@ -137,26 +137,7 @@ export class TaskWorker {
 
 		const now = performance.now();
 
-		// 使用数组 join 构建 payload，避免 += 在百万级 SQL 下的 GC 压力
-		const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
-		let payload;
-		if (useWalBatch) {
-			const parts = [`BEGIN;\n`];
-			for (const task of batch) {
-				parts.push(task.sql, "\n");
-			}
-			parts.push("COMMIT;\n");
-			for (const task of batch) {
-				parts.push(`SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`);
-			}
-			payload = parts.join("");
-		} else {
-			const parts = [];
-			for (const task of batch) {
-				parts.push(buildPayload(task.sql, task.token, { skipNormalize: true }));
-			}
-			payload = parts.join("");
-		}
+		const payload = buildBatchPayload(batch);
 
 		for (const task of batch) {
 			task.startTime = now;
