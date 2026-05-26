@@ -1,5 +1,5 @@
 {
-    "name": "sqlite-wrapper.js",
+    "name": "sqlite-executor",
     "version": "3.4.1",
     "private": false,
     "description": "A wrapper for SQLite3 with a focus on simplicity and ease of use.",

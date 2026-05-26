@@ -1,9 +1,9 @@
-# sqlite-wrapper.js
+# sqlite-executor
 
 [![Badge](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/en_US)
 [![LICENSE](https://img.shields.io/badge/license-Anti%20996-blue.svg?style=flat-square)](https://github.com/996icu/996.ICU/blob/master/LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E=18-blue.svg?style=flat-square)
-[![npm version](https://badge.fury.io/js/sqlite-wrapper.js.svg)](https://badge.fury.io/js/sqlite-wrapper.js)
+[![npm version](https://badge.fury.io/js/sqlite-executor.svg)](https://badge.fury.io/js/sqlite-executor)
 ![CI](https://github.com/axetroy/sqlite-wrapper.js/actions/workflows/build.yml/badge.svg)
 
 A lightweight, zero-dependency SQLite wrapper for Node.js that communicates with the `sqlite3` CLI via stdin/stdout — no native addons, no `node-gyp`, no ABI headaches.
@@ -30,13 +30,13 @@ A lightweight, zero-dependency SQLite wrapper for Node.js that communicates with
 ## Installation
 
 ```bash
-npm install sqlite-wrapper.js --save
+npm install sqlite-executor --save
 ```
 
 ## Quick Start
 
 ```js
-import { SQLiteExecutor } from "sqlite-wrapper.js";
+import { SQLiteExecutor } from "sqlite-executor";
 
 const db = new SQLiteExecutor({ database: "./app.db" });
 
@@ -187,7 +187,7 @@ console.log(stats);
 Multiple executors / workers can share the same `Metrics` instance:
 
 ```js
-import { SQLiteExecutor, Metrics } from "sqlite-wrapper.js";
+import { SQLiteExecutor, Metrics } from "sqlite-executor";
 
 const metrics = new Metrics();
 
@@ -198,7 +198,7 @@ const db2 = new SQLiteExecutor({ database: "./b.db", metrics });
 ### TypeScript Usage
 
 ```typescript
-import { SQLiteExecutor } from "sqlite-wrapper.js";
+import { SQLiteExecutor } from "sqlite-executor";
 
 interface User {
   id: number;
