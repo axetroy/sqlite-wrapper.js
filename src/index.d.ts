@@ -10,32 +10,6 @@ export { SQLiteExecutor } from "./core/executor.js";
 export type { Logger, SQLiteExecutorOptions, StatementOptions, TransactionOptions, TransactionHandle } from "./core/executor.js";
 
 /**
- * 双端队列，支持 O(1) 的首尾操作。
- */
-export { Queue } from "./core/queue.js";
-
-/**
- * JSON 流式解析器。
- * - `createJsonValueParser`：从 JSON 数组中逐个提取完整值（用于 query 结果）
- * - `createRowStreamParser`：从 JSON 数组中逐行提取原始字符串（用于 stream）
- */
-export { createJsonValueParser, createRowStreamParser } from "./core/parser.js";
-export type { JsonValueParser, RowStreamParser } from "./core/parser.js";
-
-/**
- * 底层通信协议工具。
- * - `buildPayload`：将 SQL 和标记 token 组装为发送给子进程的 payload
- * - `isSentinelRow`：判断一行是否为结束标记行
- * - `TOKEN_COLUMN`：标记列名
- */
-export { buildPayload, isSentinelRow, TOKEN_COLUMN } from "./core/protocol.js";
-
-/**
- * sqlite3 子进程管理器，负责启动、写入、销毁进程。
- */
-export { ProcessManager } from "./core/process.js";
-
-/**
  * 运行时指标收集器。
  * 追踪 SQL 执行任务的吞吐、耗时、错误、超时和进程重启。
  */
@@ -46,11 +20,6 @@ export type { MetricsSnapshot } from "./core/metrics.js";
  * 有效的事务隔离级别列表。
  */
 export { VALID_TRANSACTION_MODES } from "./transaction/transaction.js";
-
-/**
- * 生成一次性的唯一标记 token，用于标记查询结果末尾。
- */
-export { generateToken } from "./utils/token.js";
 
 /**
  * 默认语句超时时间（30 秒）。
