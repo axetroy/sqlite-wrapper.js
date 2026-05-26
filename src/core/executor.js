@@ -60,9 +60,12 @@ export class SQLiteExecutor {
 			metrics: this.#metrics,
 			statementTimeout: this.#statementTimeout,
 			logger: this.#logger,
-			onTaskTimeout: (task) => this.#handleProcessFailure(
-				createTimeoutError(task.timeout, task.sql),
-			),
+			onTaskTimeout: (task) => {
+				this.#metrics.incrementTasksTimeout();
+				this.#handleProcessFailure(
+					createTimeoutError(task.timeout, task.sql),
+				);
+			},
 		});
 		this.#startProcess();
 
