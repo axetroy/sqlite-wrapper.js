@@ -108,11 +108,13 @@ export class TaskWorker {
 		});
 
 		proc.on("error", (error) => {
+			if (this.#processManager.process !== proc) return;
 			this.#logger?.error?.(`${this.#name} process error`, error);
 			this.#rejectAll(toError(error));
 		});
 
 		proc.on("close", (code, signal) => {
+			if (this.#processManager.process !== proc) return;
 			const err = new Error(`${this.#name} exited unexpectedly (code=${code}, signal=${signal ?? "none"})`);
 			this.#rejectAll(err);
 		});
@@ -147,7 +149,7 @@ export class TaskWorker {
 			}
 		} else {
 			for (const task of batch) {
-				payload += buildPayload(task.sql, task.token);
+				payload += buildPayload(task.sql, task.token, { skipNormalize: true });
 			}
 		}
 

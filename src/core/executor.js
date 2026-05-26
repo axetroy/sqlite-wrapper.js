@@ -240,11 +240,13 @@ export class SQLiteExecutor {
 		});
 
 		proc.on("error", (error) => {
+			if (this.#proc !== proc) return;
 			this.#logger?.error?.("sqlite3 process error", error);
 			this.#handleProcessFailure(error);
 		});
 
 		proc.on("close", (code, signal) => {
+			if (this.#proc !== proc) return;
 			if (this.#closed) return;
 			this.#handleProcessFailure(new Error(`sqlite3 process exited unexpectedly (code=${code}, signal=${signal ?? "none"})`));
 		});
