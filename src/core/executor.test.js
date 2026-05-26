@@ -200,6 +200,22 @@ describe("SQLiteExecutor", () => {
 		assert.equal(result[1].val, "b");
 	});
 
+	test("transaction 内 stream 逐行消费", async () => {
+		await sqlite.execute("CREATE TABLE IF NOT EXISTS tx_stream (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+		await sqlite.execute("INSERT INTO tx_stream (val) VALUES ('a'), ('b'), ('c')");
+
+		const collected = [];
+		await sqlite.transaction(async (tx) => {
+			for await (const row of tx.stream("SELECT * FROM tx_stream ORDER BY id ASC")) {
+				collected.push(row);
+			}
+		});
+
+		assert.equal(collected.length, 3);
+		assert.equal(collected[0].val, "a");
+		assert.equal(collected[2].val, "c");
+	});
+
 	test("transaction 使用非法的 mode 抛出 TypeError", async () => {
 		await assert.rejects(
 			sqlite.transaction(async () => {}, { mode: "INVALID" }),

@@ -2,8 +2,7 @@ import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRow, buildPayload, TOKEN_COLUMN } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
-
-const DEFAULT_BATCH_SIZE = 10;
+import { DEFAULT_BATCH_SIZE } from "../constants.js";
 
 /**
  * 管线化执行引擎。
@@ -131,7 +130,10 @@ export class PipelineEngine {
 
 		for (const task of batch) {
 			task.startTime = now;
-			task.timer = setTimeout(() => this.#onTaskTimeout(task), task.timeout);
+			task.timer = setTimeout(() => {
+				if (this.#inflightTasks[0] !== task) return;
+				this.#onTaskTimeout(task);
+			}, task.timeout);
 		}
 		this.#inflightTasks.push(...batch);
 		this.#processManager.write(payload);

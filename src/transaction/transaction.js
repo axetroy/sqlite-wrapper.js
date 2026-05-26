@@ -25,10 +25,10 @@ export function createTransactionHandle(scopeId, executor) {
 	const handle = {
 		execute: (sql, params = [], options = {}) => executor.enqueue("execute", sql, params, options, scopeId),
 		query: (sql, params = [], options = {}) => executor.enqueue("query", sql, params, options, scopeId),
-		stream: (sql, params = []) => {
+		stream: (sql, params = [], options = {}) => {
 			if (!Array.isArray(params)) throw new TypeError("params must be an array");
 			const buffer = new AsyncRowBuffer();
-			executor.enqueue("stream", sql, params, { onRow: (row) => buffer.push(row) }, scopeId)
+			executor.enqueue("stream", sql, params, { ...options, onRow: (row) => buffer.push(row) }, scopeId)
 				.then(() => buffer.end(), (err) => buffer.error(err));
 			return buffer;
 		},

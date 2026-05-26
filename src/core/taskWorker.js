@@ -1,9 +1,10 @@
 import { ProcessManager } from "./process.js";
 import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
-import { isSentinelRow, buildPayload } from "./protocol.js";
+import { isSentinelRow, buildPayload, TOKEN_COLUMN } from "./protocol.js";
 import { createTimeoutError } from "../utils/timeout.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
+import { DEFAULT_BATCH_SIZE } from "../constants.js";
 
 /**
  * 单个 sqlite3 进程的任务执行器。
@@ -38,7 +39,7 @@ export class TaskWorker {
 	 *   metrics?: import("./metrics.js").Metrics
 	 * }} options
 	 */
-	constructor({ binary, database, statementTimeout, logger, name, initMode, batchSize = 10, metrics }) {
+	constructor({ binary, database, statementTimeout, logger, name, initMode, batchSize = DEFAULT_BATCH_SIZE, metrics }) {
 		this.#name = name ?? "worker";
 		this.#statementTimeout = statementTimeout;
 		this.#logger = logger;
@@ -133,8 +134,24 @@ export class TaskWorker {
 
 		const now = performance.now();
 		let payload = "";
+
+		const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
+		if (useWalBatch) {
+			payload = "BEGIN;\n";
+			for (const task of batch) {
+				payload += `${task.sql}\n`;
+			}
+			payload += "COMMIT;\n";
+			for (const task of batch) {
+				payload += `SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`;
+			}
+		} else {
+			for (const task of batch) {
+				payload += buildPayload(task.sql, task.token);
+			}
+		}
+
 		for (const task of batch) {
-			payload += buildPayload(task.sql, task.token);
 			task.startTime = now;
 			task.timer = setTimeout(() => this.#handleTaskTimeout(task), task.timeout ?? this.#statementTimeout);
 		}

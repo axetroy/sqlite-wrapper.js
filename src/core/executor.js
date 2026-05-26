@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { DEFAULT_STATEMENT_TIMEOUT } from "../utils/timeout.js";
-import { VALID_TRANSACTION_MODES } from "../transaction/transaction.js";
+import { VALID_TRANSACTION_MODES, createTransactionHandle } from "../transaction/transaction.js";
 import { ProcessManager } from "./process.js";
 import { toError } from "./parser.js";
 import { generateToken } from "../utils/token.js";
@@ -159,17 +159,9 @@ export class SQLiteExecutor {
 
 		const { scopeId, release } = await this.#txScope.enter();
 
-		const tx = {
-			execute: (sql, params = [], txOptions = {}) => this.#enqueue("execute", sql, params, txOptions, scopeId),
-			query: (sql, params = [], txOptions = {}) => this.#enqueue("query", sql, params, txOptions, scopeId),
-			stream: (sql, params = [], txOptions = {}) => {
-				if (!Array.isArray(params)) throw new TypeError("params must be an array");
-				const buffer = new AsyncRowBuffer();
-				this.#enqueue("stream", sql, params, { ...txOptions, onRow: (row) => buffer.push(row) }, scopeId)
-					.then(() => buffer.end(), (err) => buffer.error(err));
-				return buffer;
-			},
-		};
+		const tx = createTransactionHandle(scopeId, {
+			enqueue: (kind, sql, params, options, sid) => this.#enqueue(kind, sql, params, options, sid),
+		});
 
 		try {
 			await tx.execute(`BEGIN ${mode}`);

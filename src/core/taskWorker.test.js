@@ -94,6 +94,50 @@ describe("TaskWorker", () => {
 		assert.deepEqual(results, [0, 1, 2, 3, 4]);
 	});
 
+	test("批量 execute 任务串行执行", async () => {
+		await new Promise((resolve, reject) => {
+			worker.enqueue({
+				kind: "execute",
+				sql: "CREATE TABLE t_batch_exec (id INTEGER PRIMARY KEY, val TEXT)",
+				timeout: 10000,
+				token: "tok-be-setup",
+				onRow: null,
+				resolve,
+				reject,
+			});
+		});
+
+		const promises = [];
+		for (let i = 0; i < 5; i++) {
+			promises.push(new Promise((resolve, reject) => {
+				worker.enqueue({
+					kind: "execute",
+					sql: `INSERT INTO t_batch_exec VALUES (${i + 1}, 'v${i + 1}')`,
+					timeout: 10000,
+					token: `tok-be-${i}`,
+					onRow: null,
+					resolve,
+					reject,
+				});
+			}));
+		}
+		await Promise.all(promises);
+
+		const rows = await new Promise((resolve, reject) => {
+			worker.enqueue({
+				kind: "query",
+				sql: "SELECT * FROM t_batch_exec ORDER BY id",
+				timeout: 10000,
+				token: "tok-be-check",
+				onRow: null,
+				resolve,
+				reject,
+			});
+		});
+
+		assert.equal(rows.length, 5);
+	});
+
 	test("SQL 错误时 reject", async () => {
 		await assert.rejects(
 			new Promise((resolve, reject) => {
