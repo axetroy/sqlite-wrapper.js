@@ -306,7 +306,6 @@ export class SQLiteExecutor {
 				onRow,
 				scopeId,
 				sqlNormalized,
-				rows: [],
 				resolve,
 				reject,
 				consumerError: null,
@@ -315,6 +314,8 @@ export class SQLiteExecutor {
 				startTime: 0,
 				rowParser: null,
 			};
+			// rows 仅 query 任务使用，execute/stream 不分配空数组以节省内存
+			if (kind === "query") task.rows = [];
 
 			if (kind === "stream") {
 				task.rowParser = setupStreamParser(task, this.#pipeline);

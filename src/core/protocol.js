@@ -15,6 +15,7 @@ export { TOKEN_COLUMN } from "../constants.js";
 export function buildPayload(sql, token, { skipNormalize = false } = {}) {
 	const normalized = skipNormalize ? sql : normalizeSQL(sql);
 	const suffix = normalized.endsWith(";") ? "" : ";";
+	// 模板字面量在 V8 中会优化为 join，保持原状即可
 	return `${normalized}${suffix}\nSELECT '${token}' AS ${TOKEN_COLUMN};\n`;
 }
 

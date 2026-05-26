@@ -74,9 +74,9 @@ export class TaskWorker {
 			sql: config.sql,
 			timeout: config.timeout,
 			token: config.token,
-			rows: [],
 			resolve: config.resolve,
 			reject: config.reject,
+			rows: config.kind === "query" ? [] : undefined,
 			onRow: config.onRow ?? null,
 			consumerError: null,
 			stderrText: "",
@@ -136,22 +136,26 @@ export class TaskWorker {
 		if (batch.length === 0) return;
 
 		const now = performance.now();
-		let payload = "";
 
+		// 使用数组 join 构建 payload，避免 += 在百万级 SQL 下的 GC 压力
 		const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
+		let payload;
 		if (useWalBatch) {
-			payload = "BEGIN;\n";
+			const parts = [`BEGIN;\n`];
 			for (const task of batch) {
-				payload += `${task.sql}\n`;
+				parts.push(task.sql, "\n");
 			}
-			payload += "COMMIT;\n";
+			parts.push("COMMIT;\n");
 			for (const task of batch) {
-				payload += `SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`;
+				parts.push(`SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`);
 			}
+			payload = parts.join("");
 		} else {
+			const parts = [];
 			for (const task of batch) {
-				payload += buildPayload(task.sql, task.token, { skipNormalize: true });
+				parts.push(buildPayload(task.sql, task.token, { skipNormalize: true }));
 			}
+			payload = parts.join("");
 		}
 
 		for (const task of batch) {
@@ -221,9 +225,8 @@ export class TaskWorker {
 		this.#scheduledFinalize = true;
 		setImmediate(() => {
 			this.#scheduledFinalize = false;
-			const tasks = [...this.#pendingFinalizeTasks];
-			this.#pendingFinalizeTasks.clear();
-			for (const task of tasks) {
+			// 直接遍历 Set 而非展开为数组，避免百万级 SQL 下高频率的中间数组分配
+			for (const task of this.#pendingFinalizeTasks) {
 				if (task.stderrText) {
 					this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
 					continue;
@@ -241,6 +244,7 @@ export class TaskWorker {
 
 				this.#settleTask(task, null, undefined);
 			}
+			this.#pendingFinalizeTasks.clear();
 			this.#pumpQueue();
 		});
 	}

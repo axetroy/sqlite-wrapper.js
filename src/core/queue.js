@@ -1,4 +1,5 @@
 const INITIAL_CAPACITY = 16;
+const SHRINK_THRESHOLD = 256; // >= 256 slots → clear() 时收缩到 INITIAL_CAPACITY
 
 export class Queue {
 	#items = new Array(INITIAL_CAPACITY);
@@ -52,6 +53,20 @@ export class Queue {
 		this.#head = 0;
 		this.#tail = 0;
 		this.#size = 0;
+		this.#shrinkIfNeeded();
+	}
+
+	/**
+	 * 如果 backing array 远超实际需求，收缩到初始容量以释放内存。
+	 * 仅在 clear() 中调用（非热路径），避免热路径上的 GC 压力。
+	 * 在百万级 SQL 的高负载场景下，队列可能膨胀到数十万 slots，
+	 * 任务耗尽后的大数组将长期驻留内存。收缩解决此问题。
+	 */
+	#shrinkIfNeeded() {
+		if (this.#items.length >= SHRINK_THRESHOLD) {
+			this.#items = new Array(INITIAL_CAPACITY);
+			this.#mask = INITIAL_CAPACITY - 1;
+		}
 	}
 
 	remove(value) {
