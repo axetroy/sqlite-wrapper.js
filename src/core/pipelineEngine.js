@@ -1,7 +1,6 @@
 import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRow, buildBatchPayload } from "./protocol.js";
-import { generateToken } from "../utils/token.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { DEFAULT_BATCH_SIZE } from "../constants.js";
 
@@ -112,19 +111,7 @@ export class PipelineEngine {
 
 		const now = performance.now();
 
-		// WAL batch 吞吐优化：所有 execute 任务共享一个 batchToken，
-		// 只发一个 sentinel 查询，减少 ~67% 的 JSON 解析量
-		const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
-		let payload;
-		if (useWalBatch) {
-			const batchToken = generateToken();
-			for (const task of batch) {
-				task.token = batchToken;
-			}
-			payload = buildBatchPayload(batch, { batchToken });
-		} else {
-			payload = buildBatchPayload(batch);
-		}
+		const payload = buildBatchPayload(batch);
 
 		for (const task of batch) {
 			task.startTime = now;
@@ -177,33 +164,17 @@ export class PipelineEngine {
 			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
-			// WAL batch 合并：当多个 inflight 任务共享同一个 token 时（由 pumpQueue
-			// 生成的 batchToken），一个 sentinel JSON 覆盖整个 batch，需全部出队结算。
-			// 对单任务场景，此循环不执行（后续任务 token 不同）。
-			const completed = [task];
-			while (this.#inflightTasks.length > 0 && this.#inflightTasks[0].token === task.token) {
-				const t = this.#inflightTasks.shift();
-				clearTimeout(t.timer);
-				completed.push(t);
-			}
-
-			// WAL batch：任一任务有 consumerError 则整个 batch 失败
-			const ce = completed.find(t => t.consumerError);
-			if (ce) {
-				for (const t of completed) {
-					this.#settleTask(t, ce.consumerError, undefined);
-				}
-				this.#pumpQueue();
-				return;
-			}
-
 			// 无论 stderrText 是否为空，都走 pendingFinalize 延迟结算。
 			// 原因：Windows 上 sqlite3 的 stderr 输出可能被 OS pipe 拆分为多个 chunk，
 			// 若在此处立即 reject，后续到达的 stderr chunk 会丢失或被错误地配给下一个 inflight 任务。
 			// 通过 pendingFinalize + setImmediate 给 stderr chunk 留足时间到达。
-			for (const t of completed) {
-				this.#pendingFinalizeTasks.add(t);
+			if (task.consumerError) {
+				this.#settleTask(task, task.consumerError, undefined);
+				this.#pumpQueue();
+				return;
 			}
+
+			this.#pendingFinalizeTasks.add(task);
 			this.#scheduleFinalizeCheck();
 			this.#pumpQueue();
 			return;

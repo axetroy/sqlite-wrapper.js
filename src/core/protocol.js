@@ -24,17 +24,12 @@ export function buildPayload(sql, token, { skipNormalize = false } = {}) {
  * 由 PipelineEngine 和 TaskWorker 共享，避免 25 行重复 payload 构建逻辑。
  *
  * 如果全是 execute 类型且数量 > 1，自动使用 WAL 批量优化：
- * 将多条 INSERT/UPDATE 用 BEGIN/COMMIT 包裹。
- *
- * 在 WAL batch 模式下，如果提供了 batchToken，仅发送一个 sentinel 查询，
- * 否则为每个任务发送独立的 sentinel（向后兼容）。
- * 单 sentinel 可将 JSON 解析量减少 ~67%，是百万级 SQL 下最主要的吞吐优化。
+ * 将多条 INSERT/UPDATE 用 BEGIN/COMMIT 包裹后再追加各自的 sentinel token。
  *
  * @param {Array<{ kind: string, sql: string, token: string }>} batch
- * @param {{ batchToken?: string }} [options] - 传入 batchToken 则 WAL batch 仅发一个 sentinel
  * @returns {string}
  */
-export function buildBatchPayload(batch, { batchToken } = {}) {
+export function buildBatchPayload(batch) {
 	const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
 	if (useWalBatch) {
 		const parts = ["BEGIN;\n"];
@@ -42,14 +37,8 @@ export function buildBatchPayload(batch, { batchToken } = {}) {
 			parts.push(task.sql, "\n");
 		}
 		parts.push("COMMIT;\n");
-		if (batchToken) {
-			// 单 sentinel 覆盖整个 batch（吞吐优化）
-			parts.push(`SELECT '${batchToken}' AS ${TOKEN_COLUMN};\n`);
-		} else {
-			// 每任务独立 sentinel（向后兼容）
-			for (const task of batch) {
-				parts.push(`SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`);
-			}
+		for (const task of batch) {
+			parts.push(`SELECT '${task.token}' AS ${TOKEN_COLUMN};\n`);
 		}
 		return parts.join("");
 	}
