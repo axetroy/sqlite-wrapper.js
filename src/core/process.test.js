@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { describe, before, after, beforeEach, afterEach } from "node:test";
+import test, { describe, afterEach } from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,11 +11,17 @@ const __dirname = path.dirname(__filename);
 const root = path.join(__dirname, "..", "..");
 const SQLite3BinaryFile = path.join(root, "bin", "sqlite3" + (process.platform === "win32" ? ".exe" : ""));
 
-before(async () => {
-	await downloadSQLite3();
-});
+/** @type {boolean} */
+let sqlite3Ready = false;
 
-describe("ProcessManager", () => {
+try {
+	await downloadSQLite3();
+	sqlite3Ready = true;
+} catch (err) {
+	console.error("Failed to download sqlite3, ProcessManager tests will be skipped:", err.message);
+}
+
+describe("ProcessManager", { skip: !sqlite3Ready }, () => {
 	/** @type {ProcessManager[]} */
 	const cleanup = [];
 

@@ -18,6 +18,8 @@ async function downloadFileWithProgress(url, outputPath) {
 		method: "get",
 		url: url,
 		responseType: "stream",
+		// 整体超时 60 秒（含下载流式数据），防止 CI 网络慢时无限挂起
+		signal: AbortSignal.timeout(60000),
 	});
 
 	const totalLength = headers["content-length"];
@@ -110,6 +112,26 @@ async function main() {
 		return;
 	}
 
+	// 文件锁：用目录原子创建作为跨 Worker 互斥锁，防止多个 Worker 同时下载
+	const lockDir = join(ROOT, "bin", ".sqlite3-download.lock");
+	try {
+		fs.mkdirSync(lockDir);
+	} catch (err) {
+		if (err.code === "EEXIST") {
+			// 另一个 Worker 正在下载，等待二进制文件出现（最多等 60 秒）
+			const deadline = Date.now() + 60000;
+			while (!fs.existsSync(sqlite3Path)) {
+				if (Date.now() > deadline) {
+					throw new Error("Timed out waiting for sqlite3 binary to be downloaded by another worker");
+				}
+				await new Promise((r) => setTimeout(r, 500));
+			}
+			printDownloadInfo();
+			return;
+		}
+		throw err;
+	}
+
 	downloadPromise = (async () => {
 		console.log("Downloading SQLite3...");
 
@@ -152,6 +174,8 @@ async function main() {
 		await downloadPromise;
 	} finally {
 		downloadPromise = null;
+		// 释放锁（其他 Worker 此时已能检测到 sqlite3Path）
+		try { fs.rmdirSync(lockDir); } catch { /* ignore */ }
 	}
 }
 
