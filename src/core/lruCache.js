@@ -4,10 +4,13 @@
  * 使用 `get()` 命中时自动将条目提升到末尾；
  * `set()` 在达到容量上限时淘汰最久未访问的条目（首个 key）。
  * 仅缓存字符串 key，长度超过 `maxKeyLength` 的 key 不会被缓存。
+ *
+ * @template T
  */
 export class LRUCache {
 	#maxSize;
 	#maxKeyLength;
+	/** @type {Map<string, T>} */
 	#map = new Map();
 
 	/**
@@ -21,7 +24,7 @@ export class LRUCache {
 	/**
 	 * 获取缓存值。命中时将条目提升到末尾；未命中或 key 不合法时返回 undefined。
 	 * @param {string} key
-	 * @returns {string | undefined}
+	 * @returns {T | undefined}
 	 */
 	get(key) {
 		if (typeof key !== "string" || key.length > this.#maxKeyLength) return undefined;
@@ -35,7 +38,7 @@ export class LRUCache {
 	/**
 	 * 设置缓存值。达到容量上限时淘汰最旧条目。超长 key 不缓存。
 	 * @param {string} key
-	 * @param {string} value
+	 * @param {T} value
 	 */
 	set(key, value) {
 		if (typeof key !== "string" || key.length > this.#maxKeyLength) return;

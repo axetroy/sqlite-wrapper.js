@@ -1,3 +1,5 @@
+import { LRUCache } from "./core/lruCache.js";
+
 // Character code constants used across functions
 const CC_SINGLE_QUOTE = 39; // '
 const CC_DOUBLE_QUOTE = 34; // "
@@ -32,10 +34,8 @@ export function escapeValue(value) {
 
 // LRU cache for interpolateSQL: stores pre-parsed SQL templates so repeated calls
 // with the same template (but different params) skip the full character scan.
-// Key: SQL template string; Value: { segments: string[], paramCount: number }.
-const _INTERP_CACHE_MAX_SIZE = 256;
-const _INTERP_CACHE_MAX_KEY_LEN = 4096;
-const _interpCache = new Map();
+/** @type {LRUCache<{ segments: string[], paramCount: number }>} */
+const _interpCache = new LRUCache({ maxSize: 256, maxKeyLength: 4096 });
 
 /**
  * Parse an SQL template into text segments separated by `?` placeholders.
@@ -155,31 +155,12 @@ export function interpolateSQL(sql, params) {
 	}
 
 	// Look up the pre-parsed template in the LRU cache.
-	// On hit, move the entry to the end to maintain LRU order.
-	const cacheable = sql.length <= _INTERP_CACHE_MAX_KEY_LEN;
-	let template = cacheable ? _interpCache.get(sql) : undefined;
+	// On hit, the LRUCache automatically promotes the entry to the end.
+	let template = _interpCache.get(sql);
 
-	if (template !== undefined) {
-		// Only promote to the end of the Map (LRU update) when the cache has reached
-		// capacity and a subsequent insertion would trigger eviction.
-		// Using >= (not >) is intentional: when size equals the limit the cache IS full,
-		// so we must maintain correct LRU order to ensure the least-recently-used entry
-		// gets evicted on the next insertion — not a recently-accessed one.
-		// Skipping the delete+set when the cache is below capacity avoids constant Map
-		// mutation overhead on workloads that use fewer than _INTERP_CACHE_MAX_SIZE
-		// distinct templates (the common case).
-		if (_interpCache.size >= _INTERP_CACHE_MAX_SIZE) {
-			_interpCache.delete(sql);
-			_interpCache.set(sql, template);
-		}
-	} else {
+	if (template === undefined) {
 		template = _parseTemplate(sql);
-		if (cacheable) {
-			if (_interpCache.size >= _INTERP_CACHE_MAX_SIZE) {
-				_interpCache.delete(_interpCache.keys().next().value);
-			}
-			_interpCache.set(sql, template);
-		}
+		_interpCache.set(sql, template);
 	}
 
 	const { segments, paramCount } = template;
@@ -210,7 +191,6 @@ const _normDecoder = new TextDecoder("utf-16le");
 
 // LRU cache for normalizeSQL: skips repeated full-string scans for high-frequency SQL
 // such as BEGIN/COMMIT/ROLLBACK or fixed-template queries.
-import { LRUCache } from "./core/lruCache.js";
 const _normCache = new LRUCache({ maxSize: 256, maxKeyLength: 4096 });
 
 export function normalizeSQL(sql) {
