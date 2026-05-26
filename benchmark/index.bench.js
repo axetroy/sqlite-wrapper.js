@@ -11,8 +11,6 @@ const __dirname = path.dirname(__filename);
 
 const root = path.join(__dirname, "..");
 
-const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
-
 function dbPathFor(scenarioIndex) {
 	return path.join(__dirname, `benchmark-${scenarioIndex}.db`);
 }
@@ -35,9 +33,9 @@ const PRODUCT_COUNT = 1000;
 const CUSTOMER_COUNT = 100;
 const ORDER_COUNT = 1000;
 const TEMP_DATA_COUNT = 5000;
-const LARGE_TABLE_ROW_COUNT = isCI ? 50000 : 100000;
-const SIMPLE_COMMAND_COUNT = isCI ? 50000 : 100000;
-const BURST_INSERT_COUNT = isCI ? 5000 : 20000;
+const LARGE_TABLE_ROW_COUNT = 10000
+const SIMPLE_COMMAND_COUNT = 10000
+const BURST_INSERT_COUNT = 1000
 const CHUNKED_ENQUEUE_SIZE = 1000;
 
 /**
