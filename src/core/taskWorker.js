@@ -19,7 +19,8 @@ export class TaskWorker {
 	#processManager;
 	#pendingQueue = new Queue();
 	#inflightTasks = [];
-	#pendingFinalizeTask = null;
+	#pendingFinalizeTasks = new Set();
+	#scheduledFinalize = false;
 	#valueParser;
 	#statementTimeout;
 	#logger;
@@ -55,11 +56,11 @@ export class TaskWorker {
 	}
 
 	get idle() {
-		return this.#inflightTasks.length === 0 && this.#pendingQueue.isEmpty() && !this.#pendingFinalizeTask;
+		return this.#inflightTasks.length === 0 && this.#pendingQueue.isEmpty() && this.#pendingFinalizeTasks.size === 0;
 	}
 
 	get pendingStatements() {
-		return this.#pendingQueue.size + this.#inflightTasks.length + (this.#pendingFinalizeTask ? 1 : 0);
+		return this.#pendingQueue.size + this.#inflightTasks.length + this.#pendingFinalizeTasks.size;
 	}
 
 	/**
@@ -195,20 +196,9 @@ export class TaskWorker {
 
 			// stderr 和 stdout 是独立的 OS 管道，data 事件触发顺序无法保证。
 			// 延迟一帧再 finalize，给 stderr 一个事件循环周期的时间到达。
-			this.#pendingFinalizeTask = task;
-			setImmediate(() => {
-				this.#pendingFinalizeTask = null;
-				if (task.stderrText) {
-					this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-				} else if (task.consumerError) {
-					this.#settleTask(task, task.consumerError, undefined);
-				} else if (task.kind === "query") {
-					this.#settleTask(task, null, task.rows);
-				} else {
-					this.#settleTask(task, null, undefined);
-				}
-				this.#pumpQueue();
-			});
+			// 多个 task 共享同一个 setImmediate，减少事件循环开销。
+			this.#pendingFinalizeTasks.add(task);
+			this.#scheduleFinalizeCheck();
 			this.#pumpQueue();
 			return;
 		}
@@ -223,8 +213,40 @@ export class TaskWorker {
 		}
 	}
 
+	/**
+	 * 批量处理 pendingFinalize 任务，合并多次 setImmediate 为一次。
+	 */
+	#scheduleFinalizeCheck() {
+		if (this.#scheduledFinalize) return;
+		this.#scheduledFinalize = true;
+		setImmediate(() => {
+			this.#scheduledFinalize = false;
+			const tasks = [...this.#pendingFinalizeTasks];
+			this.#pendingFinalizeTasks.clear();
+			for (const task of tasks) {
+				if (task.stderrText) {
+					this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
+					continue;
+				}
+
+				if (task.consumerError) {
+					this.#settleTask(task, task.consumerError, undefined);
+					continue;
+				}
+
+				if (task.kind === "query") {
+					this.#settleTask(task, null, task.rows);
+					continue;
+				}
+
+				this.#settleTask(task, null, undefined);
+			}
+			this.#pumpQueue();
+		});
+	}
+
 	#handleStderrChunk(chunk) {
-		const task = this.#pendingFinalizeTask ?? this.#inflightTasks[0];
+		const task = this.#inflightTasks[0] ?? this.#pendingFinalizeTasks.values().next().value;
 		if (!task) {
 			this.#logger?.error?.(String(chunk).trim());
 			return;
@@ -256,9 +278,9 @@ export class TaskWorker {
 			this.#settleTask(task, error, undefined);
 		}
 
-		if (this.#pendingFinalizeTask) {
-			this.#settleTask(this.#pendingFinalizeTask, error, undefined);
-			this.#pendingFinalizeTask = null;
+		for (const task of this.#pendingFinalizeTasks) {
+			this.#settleTask(task, error, undefined);
 		}
+		this.#pendingFinalizeTasks.clear();
 	}
 }
