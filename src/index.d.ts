@@ -26,8 +26,3 @@ export { VALID_TRANSACTION_MODES } from "./transaction/transaction.js";
  * `createTimeoutError` 用于构造带 SQL 上下文的超时错误。
  */
 export { DEFAULT_STATEMENT_TIMEOUT, createTimeoutError } from "./utils/timeout.js";
-
-/**
- * 在系统 PATH 中查找可执行文件。
- */
-export { which } from "./which.js";
