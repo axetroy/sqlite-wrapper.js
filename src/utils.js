@@ -210,25 +210,14 @@ const _normDecoder = new TextDecoder("utf-16le");
 
 // LRU cache for normalizeSQL: skips repeated full-string scans for high-frequency SQL
 // such as BEGIN/COMMIT/ROLLBACK or fixed-template queries.
-// Map insertion order provides simple LRU semantics: on hit, move the entry to the end;
-// when the cache is full, evict the oldest entry (first key in the Map).
-// Only SQL strings up to _NORM_CACHE_MAX_KEY_LEN characters are cached to avoid
-// retaining large strings in memory.
-const _NORM_CACHE_MAX_SIZE = 256;
-const _NORM_CACHE_MAX_KEY_LEN = 4096;
-const _normCache = new Map();
+import { LRUCache } from "./core/lruCache.js";
+const _normCache = new LRUCache({ maxSize: 256, maxKeyLength: 4096 });
 
 export function normalizeSQL(sql) {
 	// Check the cache before scanning for short SQL strings.
 	// On hit, promote the entry to the end to maintain LRU order.
-	if (sql.length <= _NORM_CACHE_MAX_KEY_LEN) {
-		const cached = _normCache.get(sql);
-		if (cached !== undefined) {
-			_normCache.delete(sql);
-			_normCache.set(sql, cached);
-			return cached;
-		}
-	}
+	const cached = _normCache.get(sql);
+	if (cached !== undefined) return cached;
 
 	const len = sql.length;
 
@@ -326,13 +315,8 @@ export function normalizeSQL(sql) {
 		result = _normDecoder.decode(outCodes.subarray(0, writePos));
 	}
 
-	// Populate the cache; evict the oldest entry (first Map key) when at capacity.
-	if (sql.length <= _NORM_CACHE_MAX_KEY_LEN) {
-		if (_normCache.size >= _NORM_CACHE_MAX_SIZE) {
-			_normCache.delete(_normCache.keys().next().value);
-		}
-		_normCache.set(sql, result);
-	}
+	// Populate the cache; eviction is handled internally by LRUCache.
+	_normCache.set(sql, result);
 
 	return result;
 }
