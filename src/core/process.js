@@ -15,7 +15,6 @@ export class ProcessManager {
 	#database;
 	#proc = null;
 	#initMode;
-	#writeBuffer = "";
 	#draining = false;
 
 	/**
@@ -72,29 +71,22 @@ export class ProcessManager {
 
 	/**
 	 * 向子进程的 stdin 写入数据。
-	 * 当底层管道的写缓冲区满时（Windows 上管道缓冲区仅 4KB），
-	 * Node.js 的 write() 返回 false。此时将数据暂存在 #writeBuffer 中，
-	 * 等待 drain 事件触发后继续写入，以避免管道死锁。
+	 *
+	 * 当底层的 OS 管道缓冲区满时（Windows 上仅 4KB，Unix 64KB），
+	 * Node.js 的 stream.write() 返回 false，但数据已进入其内部缓冲队列，
+	 * 等待 drain 事件后自动写入 OS 管道。我们只需记录 draining 状态，
+	 * 无需额外维护写缓冲 —— Node.js 会处理好排队。
+	 *
 	 * @param {string} data
 	 */
 	write(data) {
 		const stream = this.#proc?.stdin;
 		if (!stream) return;
 
-		if (this.#draining) {
-			this.#writeBuffer += data;
-			return;
-		}
-
-		const ok = stream.write(data);
-		if (!ok) {
+		if (!stream.write(data) && !this.#draining) {
 			this.#draining = true;
-			this.#writeBuffer += data;
 			stream.once("drain", () => {
 				this.#draining = false;
-				const buf = this.#writeBuffer;
-				this.#writeBuffer = "";
-				if (buf) this.write(buf);
 			});
 		}
 	}
@@ -130,7 +122,6 @@ export class ProcessManager {
 		const proc = this.#proc;
 		if (!proc) return null;
 		this.#proc = null;
-		this.#writeBuffer = "";
 		this.#draining = false;
 		proc.stdout?.removeAllListeners();
 		proc.stderr?.removeAllListeners();

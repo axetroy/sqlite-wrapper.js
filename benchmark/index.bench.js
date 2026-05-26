@@ -303,7 +303,7 @@ async function main() {
 
 	// Benchmark 5: SELECT with WHERE clause
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPathFor(5), statementTimeout: 600_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPathFor(4), statementTimeout: 600_000 });
 		results.push(
 			await benchmark(
 				"SELECT with WHERE clause",
@@ -318,7 +318,7 @@ async function main() {
 
 	// Benchmark 6: UPDATE operation
 	{
-		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPathFor(6), statementTimeout: 600_000 });
+		const sqlite = new SQLiteExecutor({ binary: sqlite3Path, database: dbPathFor(4), statementTimeout: 600_000 });
 		results.push(
 			await benchmark(
 				"UPDATE Single Row",
@@ -755,4 +755,8 @@ async function main() {
 	console.log("Benchmarks completed!");
 }
 
-main().catch(console.error);
+main().catch((err) => {
+	console.error(err);
+	try { cleanupDatabases(); } catch {}
+	process.exit(1);
+});
