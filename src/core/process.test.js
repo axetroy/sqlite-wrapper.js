@@ -21,7 +21,7 @@ describe("ProcessManager", () => {
 
 	afterEach(() => {
 		for (const pm of cleanup) {
-			pm.kill();
+			try { pm.kill(); } catch { /* 清理阶段绝不抛出，防止级联取消后续测试 */ }
 		}
 		cleanup.length = 0;
 	});
@@ -52,16 +52,21 @@ describe("ProcessManager", () => {
 		const proc = pm.start();
 
 		const output = await new Promise((resolve, reject) => {
-			const timer = setTimeout(() => {
+			function cleanup() {
+				clearTimeout(timer);
 				proc.stdout.removeAllListeners("data");
+				proc.off("error", onError);
+			}
+			const onError = (err) => { cleanup(); reject(err); };
+			const timer = setTimeout(() => {
+				cleanup();
 				resolve("");
 			}, 5000);
 			proc.stdout.on("data", (chunk) => {
-				clearTimeout(timer);
-				proc.stdout.removeAllListeners("data");
+				cleanup();
 				resolve(String(chunk));
 			});
-			proc.once("error", reject);
+			proc.on("error", onError);
 			pm.write("SELECT 1;\n");
 		});
 
