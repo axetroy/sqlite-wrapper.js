@@ -57,12 +57,12 @@
         "javascript",
         "typescript"
     ],
-    "homepage": "https://github.com/axetroy/sqlite-wrapper.js#readme",
+    "homepage": "https://github.com/axetroy/sqlite-executor#readme",
     "bugs": {
-        "url": "https://github.com/axetroy/sqlite-wrapper.js/issues"
+        "url": "https://github.com/axetroy/sqlite-executor/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/axetroy/sqlite-wrapper.js.git"
+        "url": "git+https://github.com/axetroy/sqlite-executor.git"
     }
 }
