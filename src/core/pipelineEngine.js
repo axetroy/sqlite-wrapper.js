@@ -1,8 +1,8 @@
 import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
-import { isSentinelRow, buildBatchPayload } from "./protocol.js";
+import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
-import { createTimeoutError } from "../utils/timeout.js";
+import { finalizePendingTasks, prepareTaskTimeout } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
@@ -159,6 +159,35 @@ export class PipelineEngine {
 		const task = this.#inflightTasks[0];
 		if (!task) return;
 
+		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
+		if (isSentinelRaw(raw, task.token)) {
+			clearTimeout(task.timer);
+			this.#inflightTasks.shift();
+
+			if (task.timedout) {
+				this.#pumpQueue();
+				return;
+			}
+
+			// 无论 stderrText 是否为空，都走 pendingFinalize 延迟结算。
+			// 原因：Windows 上 sqlite3 的 stderr 输出可能被 OS pipe 拆分为多个 chunk，
+			// 若在此处立即 reject，后续到达的 stderr chunk 会丢失或被错误地配给下一个 inflight 任务。
+			// 通过 pendingFinalize + setImmediate 给 stderr chunk 留足时间到达。
+			if (task.consumerError) {
+				this.#settleTask(task, task.consumerError, undefined);
+				this.#pumpQueue();
+				return;
+			}
+
+			this.#pendingFinalizeTasks.add(task);
+			this.#scheduleFinalizeCheck();
+			this.#pumpQueue();
+			return;
+		}
+
+		// Fast path: 空数组 []，execute 的零行结果，跳过 JSON.parse
+		if (raw === "[]") return;
+
 		let parsed;
 		try {
 			parsed = JSON.parse(raw);
@@ -176,10 +205,6 @@ export class PipelineEngine {
 				return;
 			}
 
-			// 无论 stderrText 是否为空，都走 pendingFinalize 延迟结算。
-			// 原因：Windows 上 sqlite3 的 stderr 输出可能被 OS pipe 拆分为多个 chunk，
-			// 若在此处立即 reject，后续到达的 stderr chunk 会丢失或被错误地配给下一个 inflight 任务。
-			// 通过 pendingFinalize + setImmediate 给 stderr chunk 留足时间到达。
 			if (task.consumerError) {
 				this.#settleTask(task, task.consumerError, undefined);
 				this.#pumpQueue();
@@ -231,36 +256,18 @@ export class PipelineEngine {
 		this.#scheduledFinalize = true;
 		setImmediate(() => {
 			this.#scheduledFinalize = false;
-			// 直接遍历 Set 而非先展开为数组，避免百万级 SQL 下高频率的临时数组分配
-			for (const task of this.#pendingFinalizeTasks) {
-				if (task.stderrText) {
-					this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-					continue;
-				}
-
-				if (task.consumerError) {
-					this.#settleTask(task, task.consumerError, undefined);
-					continue;
-				}
-
-				if (task.kind === "query") {
-					this.#settleTask(task, null, task.rows);
-					continue;
-				}
-
-				this.#settleTask(task, null, undefined);
-			}
-			this.#pendingFinalizeTasks.clear();
+			finalizePendingTasks(this.#pendingFinalizeTasks, (t, e, v) => this.#settleTask(t, e, v), () => this.#pumpQueue());
 		});
 	}
 
 	#handleTaskTimeout(task) {
-		if (task.settled) return;
-		task.timedout = true;
-		clearTimeout(task.timer);
-		this.#settleTask(task, createTimeoutError(task.timeout, task.sql), undefined);
-		this.#onTaskTimeout?.(task);
+		const error = prepareTaskTimeout(task, this.#metrics);
+		if (error) {
+			this.#settleTask(task, error, undefined);
+			this.#onTaskTimeout?.(task);
+		}
 	}
+
 
 	#settleTask(task, error, value) {
 		settleTask(task, error, value, this.#metrics, { resetRowParser: true });

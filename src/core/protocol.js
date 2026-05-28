@@ -77,6 +77,20 @@ export function buildBatchPayload(batch) {
 }
 
 /**
+ * 通过原始字符串模式检测 sentinel 行，避免 JSON.parse。
+ * sentinel 原始格式固定为 [{"__sqlite_executor_token__":"TOKEN"}]，
+ * token 由 crypto.randomUUID() 生成（hex UUID，不含特殊 JSON 字符），
+ * 因此精确字符串匹配即可安全判断。
+ *
+ * @param {string} raw - 流式解析器提取的原始 JSON 文本
+ * @param {string} token - 当前任务的唯一 token
+ * @returns {boolean}
+ */
+export function isSentinelRaw(raw, token) {
+	return raw === `[{"${TOKEN_COLUMN}":"${token}"}]`;
+}
+
+/**
  * 检查解析出的 JSON 行是否为当前任务的 sentinel 结束标记行。
  *
  * @param {unknown} value - 已解析的 JSON 值

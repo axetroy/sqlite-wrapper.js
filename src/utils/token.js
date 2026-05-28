@@ -8,5 +8,7 @@ const _PID36 = process.pid.toString(36);
  * @returns {string}
  */
 export function generateToken() {
-	return `${_PREFIX}${(_counter++).toString(36)}_${_PID36}`;
+	_counter = (_counter + 1) >>> 0; // 保持在 32 位无符号整数范围内
+
+	return `${_PREFIX}${_counter.toString(36)}_${_PID36}`;
 }

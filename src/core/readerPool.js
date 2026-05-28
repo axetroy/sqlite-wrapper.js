@@ -48,7 +48,7 @@ export class ReaderPool {
 	 */
 	enqueue(task) {
 		const worker = this.#workers[this.#rrIndex % this.#workers.length];
-		this.#rrIndex++;
+		this.#rrIndex = (this.#rrIndex + 1) >>> 0;
 		worker.enqueue(task);
 	}
 

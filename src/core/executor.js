@@ -69,9 +69,7 @@ export class SQLiteExecutor {
 			metrics: this.#metrics,
 			statementTimeout: this.#statementTimeout,
 			logger: this.#logger,
-			onTaskTimeout: (task) => {
-				this.#metrics.incrementTasksTimeout();
-			},
+			onTaskTimeout: () => {},
 		});
 		this.#startProcess();
 

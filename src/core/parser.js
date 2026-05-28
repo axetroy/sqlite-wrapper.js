@@ -97,6 +97,12 @@ export function createJsonValueParser(onValue) {
 				if (code === CHAR_CLOSE_BRACKET || code === CHAR_CLOSE_BRACE) {
 					this.nesting--;
 					if (this.nesting === 0) {
+						// Fast path: 空数组 []，跳过 string 分配和 onValue 回调
+						if (index === this.start + 1) {
+							this.start = -1;
+							consumeUntil = index + 1;
+							continue;
+						}
 						const raw = this.buffer.slice(this.start, index + 1);
 						this.start = -1;
 						onValue(raw);

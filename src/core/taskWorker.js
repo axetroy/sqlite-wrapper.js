@@ -1,9 +1,9 @@
 import { ProcessManager } from "./process.js";
 import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
-import { isSentinelRow, buildBatchPayload } from "./protocol.js";
-import { createTimeoutError } from "../utils/timeout.js";
+import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
+import { finalizePendingTasks, prepareTaskTimeout } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
@@ -170,15 +170,8 @@ export class TaskWorker {
 		const task = this.#inflightTasks[0];
 		if (!task) return;
 
-		let parsed;
-		try {
-			parsed = JSON.parse(raw);
-		} catch (error) {
-			this.#rejectAll(new Error(`Invalid JSON from sqlite3: ${toError(error).message}`));
-			return;
-		}
-
-		if (isSentinelRow(parsed, task.token)) {
+		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
+		if (isSentinelRaw(raw, task.token)) {
 			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
@@ -208,6 +201,44 @@ export class TaskWorker {
 			return;
 		}
 
+		// Fast path: 空数组 []，execute 的零行结果，跳过 JSON.parse
+		if (raw === "[]") return;
+
+		let parsed;
+		try {
+			parsed = JSON.parse(raw);
+		} catch (error) {
+			this.#rejectAll(new Error(`Invalid JSON from sqlite3: ${toError(error).message}`));
+			return;
+		}
+
+		if (isSentinelRow(parsed, task.token)) {
+			clearTimeout(task.timer);
+			this.#inflightTasks.shift();
+
+			if (task.timedout) {
+				this.#pumpQueue();
+				return;
+			}
+
+			if (task.stderrText) {
+				this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
+				this.#pumpQueue();
+				return;
+			}
+
+			if (task.consumerError) {
+				this.#settleTask(task, task.consumerError, undefined);
+				this.#pumpQueue();
+				return;
+			}
+
+			this.#pendingFinalizeTasks.add(task);
+			this.#scheduleFinalizeCheck();
+			this.#pumpQueue();
+			return;
+		}
+
 		if (task.kind === "query") {
 			collectQueryRows(task, parsed);
 			return;
@@ -226,27 +257,7 @@ export class TaskWorker {
 		this.#scheduledFinalize = true;
 		setImmediate(() => {
 			this.#scheduledFinalize = false;
-			// 直接遍历 Set 而非展开为数组，避免百万级 SQL 下高频率的中间数组分配
-			for (const task of this.#pendingFinalizeTasks) {
-				if (task.stderrText) {
-					this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-					continue;
-				}
-
-				if (task.consumerError) {
-					this.#settleTask(task, task.consumerError, undefined);
-					continue;
-				}
-
-				if (task.kind === "query") {
-					this.#settleTask(task, null, task.rows);
-					continue;
-				}
-
-				this.#settleTask(task, null, undefined);
-			}
-			this.#pendingFinalizeTasks.clear();
-			this.#pumpQueue();
+			finalizePendingTasks(this.#pendingFinalizeTasks, (t, e, v) => this.#settleTask(t, e, v), () => this.#pumpQueue());
 		});
 	}
 
@@ -260,12 +271,8 @@ export class TaskWorker {
 	}
 
 	#handleTaskTimeout(task) {
-		if (task.settled) return;
-		task.timedout = true;
-		clearTimeout(task.timer);
-		task.timer = null;
-		this.#metrics?.incrementTasksTimeout();
-		this.#settleTask(task, createTimeoutError(task.timeout, task.sql), undefined);
+		const error = prepareTaskTimeout(task, this.#metrics);
+		if (error) this.#settleTask(task, error, undefined);
 	}
 
 	#settleTask(task, error, value) {
