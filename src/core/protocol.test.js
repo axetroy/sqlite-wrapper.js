@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-import { buildPayload, isSentinelRow, TOKEN_COLUMN } from "./protocol.js";
+import { buildPayload, buildBatchPayload, isSentinelRow, TOKEN_COLUMN } from "./protocol.js";
 
 describe("TOKEN_COLUMN", () => {
 	test("固定为 __sqlite_executor_token__", () => {
@@ -95,5 +95,83 @@ describe("isSentinelRow", () => {
 	test("isSentinelRow 基本类型数组不匹配", () => {
 		assert.equal(isSentinelRow(["abc"], "abc"), false);
 		assert.equal(isSentinelRow([123], "abc"), false);
+	});
+});
+
+describe("buildBatchPayload", () => {
+	test("多个 execute 使用 WAL batch（BEGIN/COMMIT 包裹）", () => {
+		const batch = [
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t1" },
+			{ kind: "execute", sql: "INSERT INTO t VALUES (2)", token: "t2" },
+		];
+		const payload = buildBatchPayload(batch);
+		assert.ok(payload.startsWith("BEGIN;"), "应以 BEGIN 开头");
+		assert.ok(payload.includes("COMMIT;"), "应包含 COMMIT");
+		for (const t of batch) {
+			assert.ok(payload.includes(t.token), `应包含 token ${t.token}`);
+		}
+	});
+
+	test("包含 BEGIN TRANSACTION 时不使用 WAL batch", () => {
+		const batch = [
+			{ kind: "execute", sql: "BEGIN TRANSACTION", token: "t1" },
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t2" },
+		];
+		const payload = buildBatchPayload(batch);
+		assert.ok(!payload.startsWith("BEGIN;"), "不应以 BEGIN 开头");
+		assert.ok(payload.includes("INSERT INTO t VALUES (1)"));
+	});
+
+	test("包含 COMMIT 时不使用 WAL batch", () => {
+		const batch = [
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t1" },
+			{ kind: "execute", sql: "COMMIT", token: "t2" },
+		];
+		const payload = buildBatchPayload(batch);
+		assert.ok(!payload.startsWith("BEGIN;"), "不应以 BEGIN 开头");
+	});
+
+	test("包含 ROLLBACK 时不使用 WAL batch", () => {
+		const batch = [
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t1" },
+			{ kind: "execute", sql: "ROLLBACK", token: "t2" },
+		];
+		const payload = buildBatchPayload(batch);
+		assert.ok(!payload.startsWith("BEGIN;"), "不应以 BEGIN 开头");
+	});
+
+	test("包含 BEGIN DEFERRED 时不使用 WAL batch", () => {
+		const batch = [
+			{ kind: "execute", sql: "BEGIN DEFERRED", token: "t1" },
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t2" },
+		];
+		const payload = buildBatchPayload(batch);
+		assert.ok(!payload.startsWith("BEGIN;"), "不应以 BEGIN 开头");
+	});
+
+	test("包含 COMMIT TRANSACTION 时不使用 WAL batch", () => {
+		const batch = [
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t1" },
+			{ kind: "execute", sql: "COMMIT TRANSACTION", token: "t2" },
+		];
+		const payload = buildBatchPayload(batch);
+		assert.ok(!payload.startsWith("BEGIN;"), "不应以 BEGIN 开头");
+	});
+
+	test("单个 execute 不使用 WAL batch", () => {
+		const batch = [
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t1" },
+		];
+		const payload = buildBatchPayload(batch);
+		assert.ok(!payload.startsWith("BEGIN;"), "不应以 BEGIN 开头");
+	});
+
+	test("混合 execute 和 query 不使用 WAL batch", () => {
+		const batch = [
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t1" },
+			{ kind: "query", sql: "SELECT 1", token: "t2" },
+		];
+		const payload = buildBatchPayload(batch);
+		assert.ok(!payload.startsWith("BEGIN;"), "不应以 BEGIN 开头");
 	});
 });

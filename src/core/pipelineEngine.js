@@ -2,7 +2,7 @@ import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
-import { DEFAULT_BATCH_SIZE } from "../constants.js";
+import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
  * 管线化执行引擎。
@@ -24,6 +24,7 @@ export class PipelineEngine {
 	#statementTimeout;
 	#logger;
 	#batchSize;
+	#maxInflight;
 	#onTaskTimeout;
 	#active = false;
 
@@ -37,12 +38,13 @@ export class PipelineEngine {
 	 *   onTaskTimeout?: (task: object) => void,
 	 * }} options
 	 */
-	constructor(processManager, { metrics, statementTimeout, logger, batchSize = DEFAULT_BATCH_SIZE, onTaskTimeout }) {
+	constructor(processManager, { metrics, statementTimeout, logger, batchSize = DEFAULT_BATCH_SIZE, maxInflight = DEFAULT_MAX_INFLIGHT, onTaskTimeout }) {
 		this.#processManager = processManager;
 		this.#metrics = metrics;
 		this.#statementTimeout = statementTimeout;
 		this.#logger = logger;
 		this.#batchSize = batchSize;
+		this.#maxInflight = maxInflight;
 		this.#onTaskTimeout = onTaskTimeout ?? (() => {});
 		this.#sharedValueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
 	}
@@ -99,9 +101,14 @@ export class PipelineEngine {
 	 */
 	#pumpQueue() {
 		if (!this.#active) return;
+		if (this.#inflightTasks.length >= this.#maxInflight) return;
 
 		const batch = [];
-		while (batch.length < this.#batchSize && !this.#queue.isEmpty()) {
+		while (
+			batch.length < this.#batchSize &&
+			!this.#queue.isEmpty() &&
+			this.#inflightTasks.length + batch.length < this.#maxInflight
+		) {
 			const task = this.#queue.peek();
 			if (task.kind === "stream" && (batch.length > 0 || this.#inflightTasks.length > 0)) break;
 			this.#queue.dequeue();

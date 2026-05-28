@@ -4,7 +4,7 @@ import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { createTimeoutError } from "../utils/timeout.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
-import { DEFAULT_BATCH_SIZE } from "../constants.js";
+import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
  * 单个 sqlite3 进程的任务执行器。
@@ -26,6 +26,7 @@ export class TaskWorker {
 	#logger;
 	#name;
 	#batchSize;
+	#maxInflight;
 	#metrics;
 
 	/**
@@ -40,11 +41,12 @@ export class TaskWorker {
 	 *   metrics?: import("./metrics.js").Metrics
 	 * }} options
 	 */
-	constructor({ binary, database, statementTimeout, logger, name, initMode, batchSize = DEFAULT_BATCH_SIZE, metrics }) {
+	constructor({ binary, database, statementTimeout, logger, name, initMode, batchSize = DEFAULT_BATCH_SIZE, maxInflight = DEFAULT_MAX_INFLIGHT, metrics }) {
 		this.#name = name ?? "worker";
 		this.#statementTimeout = statementTimeout;
 		this.#logger = logger;
 		this.#batchSize = batchSize;
+		this.#maxInflight = maxInflight;
 		this.#metrics = metrics;
 		this.#processManager = new ProcessManager({ binary, database, initMode });
 		this.#valueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
@@ -126,8 +128,14 @@ export class TaskWorker {
 	 * stream 任务必须单独发送（不与其他任务合批），且需要等 inflight 清空后再发送。
 	 */
 	#pumpQueue() {
+		if (this.#inflightTasks.length >= this.#maxInflight) return;
+
 		const batch = [];
-		while (batch.length < this.#batchSize && !this.#pendingQueue.isEmpty()) {
+		while (
+			batch.length < this.#batchSize &&
+			!this.#pendingQueue.isEmpty() &&
+			this.#inflightTasks.length + batch.length < this.#maxInflight
+		) {
 			const task = this.#pendingQueue.peek();
 			if (task.kind === "stream" && (batch.length > 0 || this.#inflightTasks.length > 0)) break;
 			this.#pendingQueue.dequeue();

@@ -266,6 +266,185 @@ describe("PipelineEngine", () => {
 		});
 	});
 
+	// ── WAL batch 跳过事务控制语句 ────────────────────
+
+	describe("WAL batch 跳过事务控制", () => {
+		test("BEGIN TRANSACTION 在 batch 中时跳过 WAL batch", () => {
+			engine.deactivate();
+			const { task: t1 } = createTask({
+				kind: "execute",
+				sql: "BEGIN TRANSACTION",
+			});
+			const { task: t2 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+			});
+			engine.enqueue(t1);
+			engine.enqueue(t2);
+			engine.activate();
+			engine.pump();
+
+			assert.equal(mockPM._writes.length, 1);
+			const payload = mockPM._writes[0];
+			assert.ok(!payload.startsWith("BEGIN;"), "不应使用 WAL batch 包裹");
+			assert.ok(payload.includes("BEGIN TRANSACTION"));
+			assert.ok(payload.includes("INSERT INTO t VALUES (1)"));
+			disarm(t1);
+			disarm(t2);
+		});
+
+		test("COMMIT 在 batch 中时跳过 WAL batch", () => {
+			engine.deactivate();
+			const { task: t1 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+			});
+			const { task: t2 } = createTask({
+				kind: "execute",
+				sql: "COMMIT",
+			});
+			engine.enqueue(t1);
+			engine.enqueue(t2);
+			engine.activate();
+			engine.pump();
+
+			assert.equal(mockPM._writes.length, 1);
+			const payload = mockPM._writes[0];
+			assert.ok(!payload.startsWith("BEGIN;"), "不应使用 WAL batch 包裹");
+			disarm(t1);
+			disarm(t2);
+		});
+
+		test("ROLLBACK 在 batch 中时跳过 WAL batch", () => {
+			engine.deactivate();
+			const { task: t1 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+			});
+			const { task: t2 } = createTask({
+				kind: "execute",
+				sql: "ROLLBACK",
+			});
+			engine.enqueue(t1);
+			engine.enqueue(t2);
+			engine.activate();
+			engine.pump();
+
+			assert.equal(mockPM._writes.length, 1);
+			const payload = mockPM._writes[0];
+			assert.ok(!payload.startsWith("BEGIN;"), "不应使用 WAL batch 包裹");
+			disarm(t1);
+			disarm(t2);
+		});
+	});
+
+	// ── maxInflight ──────────────────────────────────
+
+	describe("maxInflight", () => {
+		test("达到上限后暂停发送，任务完成后续发", async () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+				batchSize: 1,
+				maxInflight: 2,
+			});
+			localEngine.activate();
+
+			const { task: t1, promise: p1 } = createTask({ token: "mi-t1" });
+			const { task: t2 } = createTask({ token: "mi-t2" });
+			const { task: t3 } = createTask({ token: "mi-t3" });
+
+			localEngine.enqueue(t1); // inflight=1, written
+			assert.equal(mockPM._writes.length, 1, "t1 应被写入");
+
+			localEngine.enqueue(t2); // inflight=2, written
+			assert.equal(mockPM._writes.length, 2, "t2 应被写入");
+
+			localEngine.enqueue(t3); // inflight=2 ≥ maxInflight, NOT written
+			assert.equal(mockPM._writes.length, 2, "t3 不应被写入（已达上限）");
+
+			// 完成 t1：inflight 降为 1，触发 t3 发送
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"mi-t1"}]`);
+			await flush();
+
+			// 注意 handleParsedValue 在 sentinel 后调用了 pumpQueue，
+			// t3 应在新的一批中被写入
+			assert.equal(mockPM._writes.length, 3, "t1 完成后 t3 应被写入");
+
+			// 完成 t2、t3
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"mi-t2"}]`);
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"mi-t3"}]`);
+			await flush();
+			await p1.catch(() => {});
+
+			localEngine.kill();
+		});
+
+		test("batch 不越过 maxInflight 上限", () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+				batchSize: 10,
+				maxInflight: 3,
+			});
+			localEngine.activate();
+
+			// 积累 5 个任务在队列中
+			localEngine.deactivate();
+			const tasks = [];
+			for (let i = 0; i < 5; i++) {
+				const { task } = createTask({ token: `mi-batch-${i}` });
+				localEngine.enqueue(task);
+				tasks.push(task);
+			}
+
+			// 激活后 pump 只应发送 3 个（maxInflight=3）
+			localEngine.activate();
+			localEngine.pump();
+
+			assert.equal(mockPM._writes.length, 1, "应有一批写入");
+			const payload = mockPM._writes[0];
+			// payload 应只包含 3 个任务
+			assert.ok(payload.includes("mi-batch-0"), "应包含任务 0");
+			assert.ok(payload.includes("mi-batch-1"), "应包含任务 1");
+			assert.ok(payload.includes("mi-batch-2"), "应包含任务 2");
+			assert.ok(!payload.includes("mi-batch-3"), "不应包含任务 3（超出上限）");
+			assert.ok(!payload.includes("mi-batch-4"), "不应包含任务 4（超出上限）");
+
+			for (const t of tasks) disarm(t);
+			localEngine.kill();
+		});
+
+		test("maxInflight=1 时每次只发一个任务", () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+				batchSize: 10,
+				maxInflight: 1,
+			});
+			localEngine.activate();
+
+			const { task: t1 } = createTask({ token: "mi1-t1" });
+			const { task: t2 } = createTask({ token: "mi1-t2" });
+
+			localEngine.enqueue(t1);
+			localEngine.enqueue(t2);
+
+			assert.equal(mockPM._writes.length, 1, "t1 发送后 t2 不应写入");
+
+			// 完成 t1
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"mi1-t1"}]`);
+
+			assert.equal(mockPM._writes.length, 2, "t1 完成后 t2 才写入");
+
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"mi1-t2"}]`);
+
+			disarm(t1);
+			disarm(t2);
+			localEngine.kill();
+		});
+	});
+
 	// ── stream 任务隔离 ──────────────────────────────
 
 	describe("stream 任务隔离", () => {

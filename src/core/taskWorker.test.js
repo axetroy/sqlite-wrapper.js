@@ -270,4 +270,52 @@ describe("TaskWorker", () => {
 			assert.equal(results[i][0].v, i);
 		}
 	});
+
+	test("200 并发突袭 INSERT 不产生 UNIQUE 冲突", async () => {
+		await new Promise((resolve, reject) => {
+			worker.enqueue({
+				kind: "execute",
+				sql: "CREATE TABLE IF NOT EXISTS burst_worker (id INTEGER PRIMARY KEY, val TEXT)",
+				timeout: 30000,
+				token: "tok-bw-setup",
+				onRow: null,
+				resolve,
+				reject,
+			});
+		});
+
+		const promises = [];
+		for (let i = 0; i < 200; i++) {
+			promises.push(new Promise((resolve, reject) => {
+				worker.enqueue({
+					kind: "execute",
+					sql: `INSERT INTO burst_worker (id, val) VALUES (${i}, 'w${i}')`,
+					timeout: 30000,
+					token: `tok-bw-${i}`,
+					onRow: null,
+					resolve,
+					reject,
+				});
+			}));
+		}
+		await Promise.all(promises);
+
+		const rows = await new Promise((resolve, reject) => {
+			worker.enqueue({
+				kind: "query",
+				sql: "SELECT id, val FROM burst_worker ORDER BY id",
+				timeout: 30000,
+				token: "tok-bw-check",
+				onRow: null,
+				resolve,
+				reject,
+			});
+		});
+
+		assert.equal(rows.length, 200, "200 条应全部写入");
+		for (let i = 0; i < 200; i++) {
+			assert.equal(rows[i].id, i, `id=${i}`);
+			assert.equal(rows[i].val, `w${i}`, `val=w${i}`);
+		}
+	});
 });

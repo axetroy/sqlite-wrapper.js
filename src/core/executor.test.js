@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import test, { afterEach, beforeEach, describe } from "node:test";
@@ -405,6 +406,84 @@ describe("SQLiteExecutor", () => {
 			rows.map((r) => r.val),
 			new Array(100).fill(0).map((_, i) => `n${i}`),
 		);
+	});
+
+	test("突袭批量 INSERT（500 并发）不产生死锁或 UNIQUE 冲突", async () => {
+		const dbFile = path.join(os.tmpdir(), `burst-${Date.now()}.db`);
+		const burstSqlite = new SQLiteExecutor({
+			binary: SQLite3BinaryFile,
+			database: dbFile,
+			statementTimeout: 30000,
+		});
+		try {
+			await burstSqlite.execute("CREATE TABLE IF NOT EXISTS burst_test (id INTEGER PRIMARY KEY, val TEXT)");
+
+			// 在一个事务内突袭写入 500 条 INSERT
+			await burstSqlite.execute("BEGIN TRANSACTION");
+			const promises = [];
+			for (let i = 0; i < 500; i++) {
+				promises.push(
+					burstSqlite.execute("INSERT INTO burst_test (id, val) VALUES (?, ?)", [i, `v${i}`]),
+				);
+			}
+			await Promise.all(promises);
+			await burstSqlite.execute("COMMIT");
+
+			// 验证 500 条全部写入且无重复
+			const rows = await burstSqlite.query("SELECT id, val FROM burst_test ORDER BY id");
+			assert.equal(rows.length, 500, "全部 500 条应写入成功");
+			for (let i = 0; i < 500; i++) {
+				assert.equal(rows[i].id, i, `id 应为 ${i}`);
+				assert.equal(rows[i].val, `v${i}`, `val 应为 v${i}`);
+			}
+
+			// 再执行一次普通查询，确保后续操作正常
+			const count = await burstSqlite.query("SELECT COUNT(*) AS cnt FROM burst_test");
+			assert.equal(count[0].cnt, 500);
+		} finally {
+			burstSqlite.close();
+			try { fs.unlinkSync(dbFile); } catch {}
+		}
+	});
+
+	test("突袭批量 UPDATE（500 并发），验证无死锁", async () => {
+		const dbFile = path.join(os.tmpdir(), `burst-upd-${Date.now()}.db`);
+		const updSqlite = new SQLiteExecutor({
+			binary: SQLite3BinaryFile,
+			database: dbFile,
+			statementTimeout: 30000,
+		});
+		try {
+			await updSqlite.execute("CREATE TABLE IF NOT EXISTS burst_upd (id INTEGER PRIMARY KEY, val TEXT, score INT)");
+
+			// 先插入 500 行
+			await updSqlite.execute("BEGIN TRANSACTION");
+			for (let i = 0; i < 500; i++) {
+				await updSqlite.execute("INSERT INTO burst_upd (id, val, score) VALUES (?, ?, ?)", [i, `v${i}`, i]);
+			}
+			await updSqlite.execute("COMMIT");
+
+			// 突袭 UPDATE 500 行
+			await updSqlite.execute("BEGIN TRANSACTION");
+			const updatePromises = [];
+			for (let i = 0; i < 500; i++) {
+				updatePromises.push(
+					updSqlite.execute("UPDATE burst_upd SET score = ? WHERE id = ?", [i + 1000, i]),
+				);
+			}
+			await Promise.all(updatePromises);
+			await updSqlite.execute("COMMIT");
+
+			// 验证所有行都被更新
+			const rows = await updSqlite.query("SELECT id, score FROM burst_upd ORDER BY id");
+			assert.equal(rows.length, 500);
+			for (let i = 0; i < 500; i++) {
+				assert.equal(rows[i].score, i + 1000, `id=${i} 的 score 应被更新`);
+			}
+		} finally {
+			updSqlite.close();
+			try { fs.unlinkSync(dbFile); } catch {}
+		}
 	});
 
 	test("读写分离: 文件 DB 创建 reader pool", () => {

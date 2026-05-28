@@ -20,17 +20,43 @@ export function buildPayload(sql, token, { skipNormalize = false } = {}) {
 }
 
 /**
+ * 判断 SQL 是否为事务控制语句（BEGIN / COMMIT / ROLLBACK）。
+ * WAL batch 不应包裹事务控制语句，否则会破坏事务嵌套层级。
+ * @param {string} sql
+ * @returns {boolean}
+ */
+function isTransactionControl(sql) {
+	const s = sql.trim().toUpperCase();
+	return (
+		s === "BEGIN" ||
+		s === "BEGIN TRANSACTION" ||
+		s === "COMMIT" ||
+		s === "COMMIT TRANSACTION" ||
+		s === "ROLLBACK" ||
+		s === "ROLLBACK TRANSACTION" ||
+		s.startsWith("BEGIN ") ||
+		s.startsWith("COMMIT ") ||
+		s.startsWith("ROLLBACK ")
+	);
+}
+
+/**
  * 将一批任务合并为单个发送给 sqlite3 进程的载荷字符串。
  * 由 PipelineEngine 和 TaskWorker 共享，避免 25 行重复 payload 构建逻辑。
  *
  * 如果全是 execute 类型且数量 > 1，自动使用 WAL 批量优化：
  * 将多条 INSERT/UPDATE 用 BEGIN/COMMIT 包裹后再追加各自的 sentinel token。
  *
+ * WAL batch 会自动跳过事务控制语句（BEGIN / COMMIT / ROLLBACK），
+ * 避免 BEGIN/COMMIT 被 WAL batch 的 BEGIN/COMMIT 再次包裹导致事务嵌套异常。
+ *
  * @param {Array<{ kind: string, sql: string, token: string }>} batch
  * @returns {string}
  */
 export function buildBatchPayload(batch) {
-	const useWalBatch = batch.length > 1 && batch.every(t => t.kind === "execute");
+	const useWalBatch =
+		batch.length > 1 &&
+		batch.every(t => t.kind === "execute" && !isTransactionControl(t.sql));
 	if (useWalBatch) {
 		const parts = ["BEGIN;\n"];
 		for (const task of batch) {
