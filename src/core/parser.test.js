@@ -88,6 +88,30 @@ describe("createJsonValueParser", () => {
 		assert.equal(values.length, 2);
 		assert.equal(values[1], '{"id":2}');
 	});
+
+	test("空数组 [] 不触发 onValue", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		parser.feed("[]");
+		assert.equal(values.length, 0, "空数组不应触发回调");
+	});
+
+	test("空数组与正常值混合时不遗漏正常值", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		parser.feed('[]{"a":1}[]{"b":2}');
+		assert.equal(values.length, 2);
+		assert.equal(values[0], '{"a":1}');
+		assert.equal(values[1], '{"b":2}');
+	});
+
+	test("非空数组仍正常触发 onValue", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		parser.feed("[1,2,3]");
+		assert.equal(values.length, 1);
+		assert.equal(values[0], "[1,2,3]");
+	});
 });
 
 describe("createRowStreamParser", () => {

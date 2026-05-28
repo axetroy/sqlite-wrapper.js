@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test, { describe } from "node:test";
 
-import { buildPayload, buildBatchPayload, isSentinelRow, TOKEN_COLUMN } from "./protocol.js";
+import { buildPayload, buildBatchPayload, isSentinelRow, isSentinelRaw, TOKEN_COLUMN } from "./protocol.js";
 
 describe("TOKEN_COLUMN", () => {
 	test("固定为 __sqlite_executor_token__", () => {
@@ -95,6 +96,49 @@ describe("isSentinelRow", () => {
 	test("isSentinelRow 基本类型数组不匹配", () => {
 		assert.equal(isSentinelRow(["abc"], "abc"), false);
 		assert.equal(isSentinelRow([123], "abc"), false);
+	});
+});
+
+describe("isSentinelRaw", () => {
+	const TOKEN = "550e8400-e29b-41d4-a716-446655440000";
+	const SENTINEL_RAW = `[{"${TOKEN_COLUMN}":"${TOKEN}"}]`;
+
+	test("精确匹配正确 sentinel 和 token 返回 true", () => {
+		assert.equal(isSentinelRaw(SENTINEL_RAW, TOKEN), true);
+	});
+
+	test("token 不匹配时返回 false", () => {
+		assert.equal(isSentinelRaw(SENTINEL_RAW, "other-token"), false);
+	});
+
+	test("数据行数组不匹配", () => {
+		assert.equal(isSentinelRaw('[{"id":1,"name":"Alice"}]', TOKEN), false);
+	});
+
+	test("空数组不匹配", () => {
+		assert.equal(isSentinelRaw("[]", TOKEN), false);
+	});
+
+	test("对象不匹配", () => {
+		assert.equal(isSentinelRaw('{"a":1}', TOKEN), false);
+	});
+
+	test("空字符串不匹配", () => {
+		assert.equal(isSentinelRaw("", TOKEN), false);
+	});
+
+	test("不带 TOKEN_COLUMN 的数组不匹配", () => {
+		assert.equal(isSentinelRaw('[{"other_field":1}]', TOKEN), false);
+	});
+
+	test("多元素数组不匹配", () => {
+		assert.equal(isSentinelRaw(`[{"${TOKEN_COLUMN}":"${TOKEN}"},{"x":1}]`, TOKEN), false);
+	});
+
+	test("UUID 格式 token 匹配", () => {
+		const uuidToken = crypto.randomUUID();
+		const raw = `[{"${TOKEN_COLUMN}":"${uuidToken}"}]`;
+		assert.equal(isSentinelRaw(raw, uuidToken), true);
 	});
 });
 
