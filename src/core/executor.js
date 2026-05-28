@@ -47,7 +47,15 @@ export class SQLiteExecutor {
 	 *   metrics?: import("./metrics.js").Metrics,
 	 * }} options
 	 */
-	constructor({ binary = "sqlite3", database = ":memory:", logger, statementTimeout = DEFAULT_STATEMENT_TIMEOUT, autoRestart = true, poolSize = 0, metrics } = {}) {
+	constructor({
+		binary = "sqlite3",
+		database = ":memory:",
+		logger,
+		statementTimeout = DEFAULT_STATEMENT_TIMEOUT,
+		autoRestart = true,
+		poolSize = 0,
+		metrics,
+	} = {}) {
 		this.#logger = logger;
 		this.#statementTimeout = this.#normalizeTimeout(statementTimeout);
 		this.#autoRestart = autoRestart !== false;
@@ -132,10 +140,16 @@ export class SQLiteExecutor {
 
 		const buffer = new AsyncRowBuffer();
 
-		this.#enqueue("stream", sql, params, {
-			...options,
-			onRow: (row) => buffer.push(row),
-		}, null).then(
+		this.#enqueue(
+			"stream",
+			sql,
+			params,
+			{
+				...options,
+				onRow: (row) => buffer.push(row),
+			},
+			null,
+		).then(
 			() => buffer.end(),
 			(err) => buffer.error(err),
 		);
@@ -198,8 +212,7 @@ export class SQLiteExecutor {
 		this.#processManager.kill();
 		try {
 			await once(this.#processManager.process, "close");
-		} catch {
-		}
+		} catch {}
 	}
 
 	[Symbol.asyncDispose]() {
@@ -305,10 +318,10 @@ export class SQLiteExecutor {
 				sqlNormalized,
 				resolve,
 				reject,
-			consumerError: null,
-			stderrText: "",
-			settled: false,
-			timer: null,
+				consumerError: null,
+				stderrText: "",
+				settled: false,
+				timer: null,
 				startTime: 0,
 				rowParser: null,
 			};
