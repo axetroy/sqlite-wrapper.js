@@ -79,4 +79,11 @@ describe("normalizeSQL", () => {
 		const sql = normalizeSQL("SELECT '你好世界 🎉'");
 		assert.equal(sql, "SELECT '你好世界 🎉';");
 	});
+
+	test("超长 SQL 触发 buffer 扩容", () => {
+		const long = "SELECT " + "very_long_column_name ".repeat(80) + "FROM t";
+		const result = normalizeSQL(long);
+		assert.ok(result.endsWith(";"));
+		assert.ok(result.includes("FROM t"));
+	});
 });

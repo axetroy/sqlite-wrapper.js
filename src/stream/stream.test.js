@@ -61,6 +61,57 @@ describe("setupStreamParser", () => {
 		assert.deepEqual(called, [1, 2]);
 		assert.ok(task.consumerError);
 	});
+
+	test("sentinel 行被回喂给 valueParser", () => {
+		const valueParserFeed = [];
+		const task = {
+			kind: "stream",
+			onRow: () => {},
+			consumerError: null,
+		};
+
+		const parser = setupStreamParser(task, {
+			feed: (raw) => valueParserFeed.push(raw),
+		});
+		parser.feed('[{"__sqlite_executor_token__":"abc"}]');
+
+		assert.equal(valueParserFeed.length, 1);
+		assert.ok(valueParserFeed[0].includes("__sqlite_executor_token__"));
+	});
+
+	test("数据行不回喂给 valueParser", () => {
+		const valueParserFeed = [];
+		const task = {
+			kind: "stream",
+			onRow: () => {},
+			consumerError: null,
+		};
+
+		const parser = setupStreamParser(task, {
+			feed: (raw) => valueParserFeed.push(raw),
+		});
+		parser.feed('[{"id":1,"name":"Alice"}]');
+
+		assert.equal(valueParserFeed.length, 0);
+	});
+
+	test("sentinel 行回喂时包裹为数组格式", () => {
+		const valueParserFeed = [];
+		const task = {
+			kind: "stream",
+			onRow: () => {},
+			consumerError: null,
+		};
+
+		const parser = setupStreamParser(task, {
+			feed: (raw) => valueParserFeed.push(raw),
+		});
+		const sentinelRaw = '{"__sqlite_executor_token__":"tok-123"}';
+		parser.feed(`[${sentinelRaw}]`);
+
+		assert.equal(valueParserFeed.length, 1);
+		assert.equal(valueParserFeed[0], `[${sentinelRaw}]`);
+	});
 });
 
 describe("createRowStreamParser 重新导出", () => {
@@ -180,5 +231,32 @@ describe("AsyncRowBuffer", () => {
 			results.push(v);
 		}
 		assert.deepEqual(results, []);
+	});
+
+	test("end 后 push 不丢失已缓存的行", async () => {
+		const buffer = new AsyncRowBuffer();
+		buffer.push(1);
+		buffer.push(2);
+		buffer.end();
+		buffer.push(3);
+
+		const results = [];
+		for await (const v of buffer) {
+			results.push(v);
+		}
+		assert.deepEqual(results, [1, 2]);
+	});
+
+	test("error 后 push 不丢失已缓存的行", async () => {
+		const buffer = new AsyncRowBuffer();
+		buffer.push(1);
+		buffer.error(new Error("fail"));
+
+		const results = [];
+		await assert.rejects(
+			(async () => { for await (const v of buffer) results.push(v); })(),
+			/fail/,
+		);
+		assert.deepEqual(results, [1]);
 	});
 });

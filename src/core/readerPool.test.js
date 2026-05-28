@@ -38,6 +38,37 @@ describe("ReaderPool", () => {
 			assert.equal(pool.size, 2);
 		});
 
+		test("pendingStatements 返回所有 worker 待处理任务数", async () => {
+			assert.equal(pool.pendingStatements, 0);
+			let deferredResolve;
+			const p = new Promise((resolve) => { deferredResolve = resolve; });
+			pool.enqueue({
+				kind: "query",
+				sql: "SELECT 1",
+				timeout: 10000,
+				token: "ps-tok",
+				onRow: null,
+				resolve: deferredResolve,
+				reject: deferredResolve,
+			});
+			assert.equal(pool.pendingStatements, 1);
+			// 确保 worker 资源被释放，否则后续测试可能受影响
+			const worker = pool._workers.find(w => w.pendingStatements > 0);
+			worker?.kill();
+		});
+
+		test("poolSize=0 抛 RangeError", () => {
+			assert.throws(
+				() => new ReaderPool({
+					binary: SQLite3BinaryFile,
+					database: ":memory:",
+					poolSize: 0,
+					statementTimeout: 30000,
+				}),
+				/RangeError/,
+			);
+		});
+
 		test("round-robin 分发任务", async () => {
 			const results = [];
 			for (let i = 0; i < 4; i++) {

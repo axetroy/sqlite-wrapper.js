@@ -20,6 +20,7 @@ export class ReaderPool {
 	 * }} options
 	 */
 	constructor({ binary, database, poolSize, statementTimeout, logger, metrics }) {
+		if (poolSize < 1) throw new RangeError("poolSize must be >= 1");
 		for (let i = 0; i < poolSize; i++) {
 			const worker = new TaskWorker({
 				binary,

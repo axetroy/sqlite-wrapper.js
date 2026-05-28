@@ -60,6 +60,7 @@ export class AsyncRowBuffer {
 
 	/** 生产者侧：添加一行数据 */
 	push(row) {
+		if (this.#done || this.#error) return;
 		if (this.#pending) {
 			const resolve = this.#pending.resolve;
 			this.#pending = null;

@@ -5,6 +5,7 @@ import { PipelineEngine } from "./pipelineEngine.js";
 import { Metrics } from "./metrics.js";
 import { TOKEN_COLUMN } from "./protocol.js";
 import { Queue } from "./queue.js";
+import { createRowStreamParser } from "./parser.js";
 
 /**
  * 创建一个存根 ProcessManager，记录 write 调用。
@@ -602,6 +603,31 @@ describe("PipelineEngine", () => {
 			engine.enqueue(task);
 
 			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"exec-token"}]`);
+
+			await flush();
+			const result = await promise;
+			assert.equal(result, undefined);
+		});
+
+		test("stream 任务数据经 rowParser 路由后剩余数据进入 sharedValueParser", async () => {
+			const rows = [];
+			const { task, promise } = createTask({
+				kind: "stream",
+				token: "stream-rp",
+				rowParser: null,
+				onRow: (row) => rows.push(row),
+			});
+			task.rowParser = createRowStreamParser((rawRow) => {
+				const row = JSON.parse(rawRow);
+				task.onRow(row);
+			});
+			engine.enqueue(task);
+
+			engine.handleStdoutChunk('[{"id":1},{"id":2}]');
+			assert.equal(rows.length, 2);
+			assert.deepEqual(rows, [{ id: 1 }, { id: 2 }]);
+
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"stream-rp"}]`);
 
 			await flush();
 			const result = await promise;
