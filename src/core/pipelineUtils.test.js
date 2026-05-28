@@ -78,7 +78,7 @@ describe("finalizePendingTasks", () => {
 		assert.equal(tasks.size, 0, "集合应在处理后清空");
 	});
 
-	test("空集合不调用 settle 和 pumpQueue", () => {
+	test("空集合不调用 settle（无任务），pumpQueue 仍被调用", () => {
 		let settleCalled = false;
 		let pumpCalled = false;
 		finalizePendingTasks(
@@ -86,8 +86,8 @@ describe("finalizePendingTasks", () => {
 			() => { settleCalled = true; },
 			() => { pumpCalled = true; },
 		);
-		assert.equal(settleCalled, true, "空集合也调用 settle");
-		assert.equal(pumpCalled, true, "空集合也调用 pumpQueue");
+		assert.equal(settleCalled, false, "空集合不调用 settle");
+		assert.equal(pumpCalled, true, "pumpQueue 仍被调用");
 	});
 });
 
@@ -96,7 +96,7 @@ describe("prepareTaskTimeout", () => {
 		return {
 			settled: false,
 			timedout: false,
-			timer: setTimeout(() => {}, 100000),
+			timer: setTimeout(() => {}, 100000).unref(),
 			timeout: 100,
 			sql: "SELECT 1",
 			...overrides,
@@ -104,7 +104,7 @@ describe("prepareTaskTimeout", () => {
 	}
 
 	test("返回 TimeoutError，标记 timedout，清除定时器", () => {
-		const timer = setTimeout(() => {}, 100000);
+		const timer = setTimeout(() => {}, 100000).unref();
 		const task = makeTask({ timer });
 		const error = prepareTaskTimeout(task, null);
 		assert.ok(error instanceof Error);
