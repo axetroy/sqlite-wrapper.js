@@ -52,6 +52,8 @@ export function setupStreamParser(task, valueParser = { feed() {} }) {
  */
 export class AsyncRowBuffer {
 	#buffer = [];
+	/** 已消费行在 #buffer 中的索引，替代 shift() 避免 O(N) 元素搬运 */
+	#index = 0;
 	#done = false;
 	#error = null;
 	#pending = null;
@@ -89,8 +91,8 @@ export class AsyncRowBuffer {
 
 	/** AsyncIterator 协议：获取下一行 */
 	next() {
-		if (this.#buffer.length > 0) {
-			return Promise.resolve({ value: this.#buffer.shift(), done: false });
+		if (this.#index < this.#buffer.length) {
+			return Promise.resolve({ value: this.#buffer[this.#index++], done: false });
 		}
 		if (this.#done) {
 			return Promise.resolve({ value: undefined, done: true });
@@ -106,6 +108,8 @@ export class AsyncRowBuffer {
 	/** for await 提前 break / return 时清理 */
 	return() {
 		this.#done = true;
+		this.#buffer = [];
+		this.#index = 0;
 		if (this.#pending) {
 			const resolve = this.#pending.resolve;
 			this.#pending = null;
