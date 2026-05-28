@@ -283,7 +283,7 @@ describe("TaskWorker", () => {
 		});
 
 		test("进程异常退出（SIGKILL）后拒绝待处理任务", async () => {
-			worker._process.kill("SIGSTOP");
+			worker._process.stdout.removeAllListeners("data");
 			const p = new Promise((resolve, reject) => {
 				worker.enqueue({
 					kind: "query",

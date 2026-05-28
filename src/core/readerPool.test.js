@@ -99,7 +99,7 @@ describe("ReaderPool", () => {
 
 		test("reader 进程异常退出后拒绝待处理任务", async () => {
 			const worker = pool._workers[0];
-			worker._process.kill("SIGSTOP");
+			worker._process.stdout.removeAllListeners("data");
 			const p = new Promise((resolve, reject) => {
 				pool.enqueue({
 					kind: "query",
