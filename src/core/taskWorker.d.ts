@@ -1,3 +1,5 @@
+import { Metrics } from "./metrics.js";
+
 /**
  * 单个 sqlite3 进程 Worker，支持管线化（pipelining）。
  *
@@ -18,6 +20,8 @@ export class TaskWorker {
 	 * @param options.name              Worker 名称，用于日志和调试
 	 * @param options.initMode          子进程初始化模式（参考 ProcessManager）
 	 * @param options.batchSize         管线化批量大小，默认 10
+	 * @param options.maxInflight       最大 inflight 任务数，默认 50
+	 * @param options.metrics           指标收集器
 	 */
 	constructor(options: {
 		binary: string;
@@ -27,6 +31,8 @@ export class TaskWorker {
 		name?: string;
 		initMode?: "wal" | "none";
 		batchSize?: number;
+		maxInflight?: number;
+		metrics?: Metrics;
 	});
 
 	/** Worker 名称 */

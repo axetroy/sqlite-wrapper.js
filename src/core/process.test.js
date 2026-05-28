@@ -145,4 +145,59 @@ describe("ProcessManager", { skip: !sqlite3Ready }, () => {
 		pm.kill();
 		assert.equal(pm.process, null);
 	});
+
+	// ── drain 背压 ─────────────────────────────
+
+	test("draining getter 初始为 false", () => {
+		const pm = createPM();
+		assert.equal(pm.draining, false);
+	});
+
+	test("setOnDrainCallback 注册回调后不立即调用", () => {
+		const pm = createPM();
+		let called = false;
+		pm.setOnDrainCallback(() => { called = true; });
+		assert.equal(called, false, "注册时不调用");
+	});
+
+	test("kill 后 draining 重置为 false", () => {
+		const pm = createPM();
+		pm.start();
+		pm.kill();
+		assert.equal(pm.draining, false);
+	});
+
+	test("write 在 pipe 满时触发 draining，drain 事件后恢复", async () => {
+		const pm = createPM();
+		pm.start();
+
+		// 消费 stdout/stderr，否则 sqlite3 写满 64KB 的 OS pipe 后会阻塞写 stdout，
+		// 进而无法读 stdin → stdin pipe 永远无法 drain → drain 事件永远不触发
+		pm.process.stdout.on("data", () => {});
+		pm.process.stderr.on("data", () => {});
+
+		let drainCalled = false;
+		pm.setOnDrainCallback(() => { drainCalled = true; });
+
+		// 写入大量数据迫使 stdin 的 OS pipe 填满
+		const largePayload = 'SELECT 1;\n'.repeat(100000);
+		pm.write(largePayload);
+
+		if (pm.draining) {
+			await new Promise((resolve) => {
+				const check = setInterval(() => {
+					if (!pm.draining) {
+						clearInterval(check);
+						resolve();
+					}
+				}, 10);
+				setTimeout(() => {
+					clearInterval(check);
+					resolve();
+				}, 10000);
+			});
+			assert.ok(drainCalled, "drain 回调应被调用");
+			assert.equal(pm.draining, false, "drain 后 draining 应恢复为 false");
+		}
+	});
 });

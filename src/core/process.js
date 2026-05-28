@@ -16,14 +16,26 @@ export class ProcessManager {
 	#proc = null;
 	#initMode;
 	#draining = false;
+	#onDrain;
 
 	/**
-	 * @param {{ binary?: string, database?: string, initMode?: "wal" | "none" }} options
+	 * @param {{ binary?: string, database?: string, initMode?: "wal" | "none", onDrain?: () => void }} options
 	 */
-	constructor({ binary, database, initMode = "wal" } = {}) {
+	constructor({ binary, database, initMode = "wal", onDrain } = {}) {
 		this.#binary = which(binary) ?? binary;
 		this.#database = database;
 		this.#initMode = initMode;
+		this.#onDrain = onDrain ?? (() => {});
+	}
+
+	/** drain 状态为 true 时表示 OS pipe 已满，应暂停写入 stdin。 */
+	get draining() {
+		return this.#draining;
+	}
+
+	/** 注册 drain 回调，当 pipe 重新可写时被调用。 */
+	setOnDrainCallback(fn) {
+		this.#onDrain = fn;
 	}
 
 	get binary() {
@@ -72,21 +84,26 @@ export class ProcessManager {
 	/**
 	 * 向子进程的 stdin 写入数据。
 	 *
-	 * 当底层的 OS 管道缓冲区满时（Windows 上仅 4KB，Unix 64KB），
-	 * Node.js 的 stream.write() 返回 false，但数据已进入其内部缓冲队列，
-	 * 等待 drain 事件后自动写入 OS 管道。我们只需记录 draining 状态，
-	 * 无需额外维护写缓冲 —— Node.js 会处理好排队。
+	 * 当 OS pipe 满时 `stream.write()` 返回 false，此刻：
+	 * - 设置 `#draining = true`，阻止后续写入（#pumpQueue 会在顶部检查 draining）
+	 * - 任务保留在队列中（不进入 inflight、不计时器），等 drain 事件后通过回调恢复发送
+	 * - OS pipe 一有空余，drain 事件触发 → 清 draining → 调用 #onDrain → #pumpQueue 重新发送
+	 *
+	 * 这样就彻底避免了 OS pipe 满导致 sqlite3 写 stdout 阻塞 → 无法读 stdin → 所有 inflight 饿死。
+	 * 管道的实际容量（Windows 4KB / Unix 64KB）不再重要 —— 写入自动节流。
 	 *
 	 * @param {string} data
 	 */
 	write(data) {
 		const stream = this.#proc?.stdin;
 		if (!stream) return;
+		if (this.#draining) return;
 
-		if (!stream.write(data) && !this.#draining) {
+		if (!stream.write(data)) {
 			this.#draining = true;
 			stream.once("drain", () => {
 				this.#draining = false;
+				this.#onDrain();
 			});
 		}
 	}

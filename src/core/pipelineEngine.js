@@ -47,6 +47,7 @@ export class PipelineEngine {
 		this.#maxInflight = maxInflight;
 		this.#onTaskTimeout = onTaskTimeout ?? (() => {});
 		this.#sharedValueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
+		this.#processManager.setOnDrainCallback(() => this.#pumpQueue());
 	}
 
 	/** 主任务队列（供事务延迟任务恢复使用）。 */
@@ -101,6 +102,7 @@ export class PipelineEngine {
 	 */
 	#pumpQueue() {
 		if (!this.#active) return;
+		if (this.#processManager.draining) return;
 		if (this.#inflightTasks.length >= this.#maxInflight) return;
 
 		const batch = [];

@@ -12,6 +12,8 @@ export interface PipelineEngineOptions {
 	logger?: { error?: (...args: any[]) => void };
 	/** 管线化批量大小，控制一次 stdin.write 合并几条语句，默认 10 */
 	batchSize?: number;
+	/** 最大 inflight 任务数，默认 50 */
+	maxInflight?: number;
 	/** 任务超时时的回调 */
 	onTaskTimeout?: (task: any) => void;
 }

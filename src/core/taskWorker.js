@@ -48,7 +48,7 @@ export class TaskWorker {
 		this.#batchSize = batchSize;
 		this.#maxInflight = maxInflight;
 		this.#metrics = metrics;
-		this.#processManager = new ProcessManager({ binary, database, initMode });
+		this.#processManager = new ProcessManager({ binary, database, initMode, onDrain: () => this.#pumpQueue() });
 		this.#valueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
 		this.#startProcess();
 	}
@@ -128,6 +128,7 @@ export class TaskWorker {
 	 * stream 任务必须单独发送（不与其他任务合批），且需要等 inflight 清空后再发送。
 	 */
 	#pumpQueue() {
+		if (this.#processManager.draining) return;
 		if (this.#inflightTasks.length >= this.#maxInflight) return;
 
 		const batch = [];

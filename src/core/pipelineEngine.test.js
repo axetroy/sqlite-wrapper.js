@@ -10,10 +10,21 @@ import { Queue } from "./queue.js";
  * 创建一个存根 ProcessManager，记录 write 调用。
  */
 function createMockProcessManager() {
+	let _drainCallback = null;
 	return {
 		_writes: [],
+		_draining: false,
+		get draining() { return this._draining; },
+		set draining(v) { this._draining = v; },
 		write(payload) {
 			this._writes.push(payload);
+		},
+		setOnDrainCallback(fn) {
+			_drainCallback = fn;
+		},
+		_triggerDrain() {
+			this._draining = false;
+			_drainCallback?.();
 		},
 	};
 }
@@ -704,6 +715,70 @@ describe("PipelineEngine", () => {
 			const result = await promise;
 			assert.deepEqual(result, []);
 			assert.ok("feed 触发了 sentinel 结算");
+		});
+	});
+
+	// ── drain 背压 ─────────────────────────────
+
+	describe("drain 背压", () => {
+		test("draining=true 时 pumpQueue 暂停写入，任务留在队列", () => {
+			mockPM.draining = true;
+			const { task } = createTask();
+			engine.enqueue(task);
+
+			assert.equal(mockPM._writes.length, 0, "不应触发 write");
+			assert.equal(engine.pendingStatements, 1, "任务留在队列中");
+		});
+
+		test("draining=true 时多个 enqueue 都不触发 write", () => {
+			mockPM.draining = true;
+			const { task: t1 } = createTask();
+			const { task: t2 } = createTask();
+			engine.enqueue(t1);
+			engine.enqueue(t2);
+
+			assert.equal(mockPM._writes.length, 0);
+			assert.equal(engine.pendingStatements, 2);
+		});
+
+		test("drain 触发后 pumpQueue 自动发送积压任务", () => {
+			mockPM.draining = true;
+			const { task } = createTask();
+			engine.enqueue(task);
+			assert.equal(mockPM._writes.length, 0, " draining 时不应写入");
+
+			mockPM._triggerDrain();
+
+			assert.equal(mockPM._writes.length, 1, "drain 后应写入");
+			assert.equal(engine.pendingStatements, 1, "任务进入 inflight");
+		});
+
+		test("draining=false 时正常写入不受影响", () => {
+			mockPM.draining = false;
+			const { task } = createTask();
+			engine.enqueue(task);
+
+			assert.equal(mockPM._writes.length, 1, "应正常触发 write");
+		});
+
+		test("draining 从 true→false→true 交替工作", () => {
+			mockPM.draining = true;
+			const { task: t1 } = createTask();
+			engine.enqueue(t1);
+			assert.equal(mockPM._writes.length, 0, "draining 时应暂停");
+
+			mockPM._triggerDrain();
+			assert.equal(mockPM._writes.length, 1, "drain 后写入积压任务");
+			const firstPayload = mockPM._writes[0];
+
+			mockPM.draining = true;
+			const { task: t2 } = createTask();
+			engine.enqueue(t2);
+			assert.equal(mockPM._writes.length, 1, "再次 draining，不应有新写入");
+
+			mockPM._triggerDrain();
+			assert.equal(mockPM._writes.length, 2, "再次 drain 后写入第二个任务");
+			assert.notEqual(mockPM._writes[0], mockPM._writes[1], "两次 payload 应不同");
 		});
 	});
 
