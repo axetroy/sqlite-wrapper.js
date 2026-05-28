@@ -8,17 +8,17 @@ export function toError(value) {
 	return value instanceof Error ? value : new Error(String(value));
 }
 
-const CHAR_QUOTE = 34;          // "
-const CHAR_BACKSLASH = 92;      // \
-const CHAR_OPEN_BRACKET = 91;   // [
-const CHAR_CLOSE_BRACKET = 93;  // ]
-const CHAR_OPEN_BRACE = 123;    // {
-const CHAR_CLOSE_BRACE = 125;   // }
-const CHAR_COMMA = 44;          // ,
-const CHAR_SPACE = 32;          //
-const CHAR_TAB = 9;             // \t
-const CHAR_LF = 10;             // \n
-const CHAR_CR = 13;             // \r
+const CHAR_QUOTE = 34; // "
+const CHAR_BACKSLASH = 92; // \
+const CHAR_OPEN_BRACKET = 91; // [
+const CHAR_CLOSE_BRACKET = 93; // ]
+const CHAR_OPEN_BRACE = 123; // {
+const CHAR_CLOSE_BRACE = 125; // }
+const CHAR_COMMA = 44; // ,
+const CHAR_SPACE = 32; //
+const CHAR_TAB = 9; // \t
+const CHAR_LF = 10; // \n
+const CHAR_CR = 13; // \r
 
 /**
  * 判断字符码是否为空白字符（空格、制表符、换行、回车）。
@@ -69,6 +69,8 @@ export function createJsonValueParser(onValue) {
 		inString: false,
 		// 前一个字符是否为反斜杠（处理字符串中的转义序列 \" \\ \/ \b \f \n \r \t \uXXXX）
 		escaped: false,
+		// 已累积消费的字节数，用于延迟 buffer 物理裁剪，减少 String 分配和 GC 压力
+		_consumed: 0,
 		feed(chunk) {
 			// 1. 将新数据追加到 buffer 尾部
 			this.buffer += chunk;
@@ -138,10 +140,18 @@ export function createJsonValueParser(onValue) {
 				}
 			}
 
-			// 3. 清理已消费部分：将已解析的完整值从 buffer 头部移除
+			// 3. 清理已消费部分：用 _consumed 记录已消费位置而非每次都物理裁剪 buffer。
+			//    避免每个完整值都产生一次 String 分配（buffer.slice），
+			//    仅在累积超过 64KB 时一次性物理裁剪，减少 GC 压力。
+			//    注意：consumeUntil 是相对 buffer 起始的绝对位置，直接赋值即可。
 			if (consumeUntil > 0) {
-				this.buffer = this.buffer.slice(consumeUntil);
-				this.readPos = 0;
+				this._consumed = consumeUntil;
+				this.readPos = this._consumed;
+				if (this._consumed > 65536) {
+					this.buffer = this.buffer.slice(this._consumed);
+					this.readPos = 0;
+					this._consumed = 0;
+				}
 			} else {
 				// 没有完整值被消费，记录当前位置，下次 feed 从此继续
 				this.readPos = this.buffer.length;
@@ -149,6 +159,7 @@ export function createJsonValueParser(onValue) {
 		},
 		reset() {
 			this.buffer = "";
+			this._consumed = 0;
 			this.start = -1;
 			this.readPos = 0;
 			this.nesting = 0;
@@ -207,6 +218,8 @@ export function createRowStreamParser(onRow) {
 		nesting: 0,
 		// 上次扫描位置
 		readPos: 0,
+		// 已累积消费的字节数，用于延迟 buffer 物理裁剪
+		_consumed: 0,
 		feed(chunk) {
 			// 如果数组已结束，直接返回新数据
 			if (this.finished) return chunk;
@@ -302,21 +315,29 @@ export function createRowStreamParser(onRow) {
 					if (lookAhead < this.buffer.length) {
 						const delimiter = this.buffer.charCodeAt(lookAhead);
 						if (delimiter === CHAR_COMMA || delimiter === CHAR_CLOSE_BRACKET) {
-							// 元素完整：切片出元素文本并回调，截断 buffer 中已处理部分
+							// 元素完整：切片出元素文本并回调
 							onRow(this.buffer.slice(this.elementStart, this.elementEnd));
-							this.buffer = this.buffer.slice(lookAhead + 1);
+							// 不直接物理裁剪 buffer，改用 _consumed 记录已消费位置
+							this._consumed = lookAhead + 1;
 							this.elementStart = -1;
 							this.elementEnd = -1;
 							this.nesting = 0;
 							if (delimiter === CHAR_CLOSE_BRACKET) {
-								// 数组结束，返回 buffer 中剩余数据
+								// 数组结束，从 _consumed 处切片剩余数据返回
 								this.finished = true;
-								const tail = this.buffer;
+								const tail = this.buffer.slice(this._consumed);
 								this.buffer = "";
+								this._consumed = 0;
 								this.readPos = 0;
 								return tail;
 							}
-							index = 0;
+							index = this._consumed;
+							// 累积消费超过 64KB 时一次物理裁剪，避免 buffer 膨胀和过多 String 分配
+							if (this._consumed > 65536) {
+								this.buffer = this.buffer.slice(this._consumed);
+								index = 0;
+								this._consumed = 0;
+							}
 							continue;
 						}
 					}
@@ -326,8 +347,18 @@ export function createRowStreamParser(onRow) {
 				index++;
 			}
 
-			// 6. buffer 裁剪：将已处理的部分从 buffer 头部移除，避免无限增长
-			//    将 elementStart ~ buffer 末尾的数据保留，其余丢弃
+			// 6. buffer 裁剪：用 _consumed 取代逐个元素的 buffer.slice，
+			//    每消费一个元素就 slice 一次在高吞吐下会大量分配临时 String。
+			//    改为累积消费偏移，仅在本轮末尾做一次物理裁剪。
+			if (this._consumed > 0) {
+				if (this.elementStart !== -1) {
+					this.elementStart -= this._consumed;
+					if (this.elementEnd !== -1) this.elementEnd -= this._consumed;
+				}
+				this.buffer = this.buffer.slice(this._consumed);
+				this._consumed = 0;
+			}
+			// 保留原始逻辑：若 elementStart > 0 则将未完成元素对齐到 buffer 头部
 			if (this.elementStart > 0) {
 				this.buffer = this.buffer.slice(this.elementStart);
 				if (this.elementEnd !== -1) this.elementEnd -= this.elementStart;
@@ -340,6 +371,7 @@ export function createRowStreamParser(onRow) {
 		},
 		reset() {
 			this.buffer = "";
+			this._consumed = 0;
 			this.started = false;
 			this.finished = false;
 			this.inString = false;
