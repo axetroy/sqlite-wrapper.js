@@ -40,6 +40,8 @@ export function processStreamRows(task, parsed) {
  * @param {{ resetRowParser?: boolean }} [options]
  */
 export function settleTask(task, error, value, metrics, { resetRowParser = false } = {}) {
+	if (task.settled) return;
+	task.settled = true;
 	clearTimeout(task.timer);
 
 	if (resetRowParser) {

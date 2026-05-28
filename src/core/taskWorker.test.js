@@ -271,6 +271,53 @@ describe("TaskWorker", () => {
 		}
 	});
 
+	test("超时只拒绝超时任务，其他 inflight 任务正常完成", { timeout: 30000 }, async () => {
+		const p1 = new Promise((resolve, reject) => {
+			worker.enqueue({
+				kind: "execute",
+				sql: "SELECT randomblob(1000000)",
+				timeout: 10,
+				token: "tok-to-1",
+				onRow: null,
+				resolve,
+				reject,
+			});
+		});
+
+		const p2 = new Promise((resolve, reject) => {
+			worker.enqueue({
+				kind: "query",
+				sql: "SELECT 1 AS v",
+				timeout: 30000,
+				token: "tok-to-2",
+				onRow: null,
+				resolve,
+				reject,
+			});
+		});
+
+		const p3 = new Promise((resolve, reject) => {
+			worker.enqueue({
+				kind: "query",
+				sql: "SELECT 2 AS v",
+				timeout: 30000,
+				token: "tok-to-3",
+				onRow: null,
+				resolve,
+				reject,
+			});
+		});
+
+		const results = await Promise.allSettled([p1, p2, p3]);
+
+		assert.equal(results[0].status, "rejected", "t1 应超时");
+		assert.ok(results[0].reason.message.includes("timed out"), `t1 错误应为超时: ${results[0].reason.message}`);
+		assert.equal(results[1].status, "fulfilled", "t2 应正常完成");
+		assert.deepEqual(results[1].value, [{ v: 1 }], "t2 结果正确");
+		assert.equal(results[2].status, "fulfilled", "t3 应正常完成");
+		assert.deepEqual(results[2].value, [{ v: 2 }], "t3 结果正确");
+	});
+
 	test("200 并发突袭 INSERT 不产生 UNIQUE 冲突", async () => {
 		await new Promise((resolve, reject) => {
 			worker.enqueue({

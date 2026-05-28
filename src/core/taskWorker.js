@@ -82,6 +82,7 @@ export class TaskWorker {
 			onRow: config.onRow ?? null,
 			consumerError: null,
 			stderrText: "",
+			settled: false,
 			errorScheduled: false,
 			timer: null,
 			startTime: 0,
@@ -176,6 +177,11 @@ export class TaskWorker {
 			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
+			if (task.timedout) {
+				this.#pumpQueue();
+				return;
+			}
+
 			if (task.stderrText) {
 				this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
 				this.#pumpQueue();
@@ -249,9 +255,12 @@ export class TaskWorker {
 	}
 
 	#handleTaskTimeout(task) {
-		if (this.#inflightTasks[0] !== task) return;
+		if (task.settled) return;
+		task.timedout = true;
+		clearTimeout(task.timer);
+		task.timer = null;
 		this.#metrics?.incrementTasksTimeout();
-		this.#rejectAll(createTimeoutError(task.timeout, task.sql));
+		this.#settleTask(task, createTimeoutError(task.timeout, task.sql), undefined);
 	}
 
 	#settleTask(task, error, value) {

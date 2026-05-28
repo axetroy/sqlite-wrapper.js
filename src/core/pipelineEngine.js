@@ -2,6 +2,7 @@ import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
+import { createTimeoutError } from "../utils/timeout.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
@@ -124,10 +125,7 @@ export class PipelineEngine {
 
 		for (const task of batch) {
 			task.startTime = now;
-			task.timer = setTimeout(() => {
-				if (this.#inflightTasks[0] !== task) return;
-				this.#onTaskTimeout(task);
-			}, task.timeout);
+			task.timer = setTimeout(() => this.#handleTaskTimeout(task), task.timeout);
 		}
 		this.#inflightTasks.push(...batch);
 		this.#processManager.write(payload);
@@ -173,6 +171,11 @@ export class PipelineEngine {
 			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
+			if (task.timedout) {
+				this.#pumpQueue();
+				return;
+			}
+
 			// 无论 stderrText 是否为空，都走 pendingFinalize 延迟结算。
 			// 原因：Windows 上 sqlite3 的 stderr 输出可能被 OS pipe 拆分为多个 chunk，
 			// 若在此处立即 reject，后续到达的 stderr chunk 会丢失或被错误地配给下一个 inflight 任务。
@@ -186,6 +189,10 @@ export class PipelineEngine {
 			this.#pendingFinalizeTasks.add(task);
 			this.#scheduleFinalizeCheck();
 			this.#pumpQueue();
+			return;
+		}
+
+		if (task.timedout) {
 			return;
 		}
 
@@ -245,6 +252,14 @@ export class PipelineEngine {
 			}
 			this.#pendingFinalizeTasks.clear();
 		});
+	}
+
+	#handleTaskTimeout(task) {
+		if (task.settled) return;
+		task.timedout = true;
+		clearTimeout(task.timer);
+		this.#settleTask(task, createTimeoutError(task.timeout, task.sql), undefined);
+		this.#onTaskTimeout?.(task);
 	}
 
 	#settleTask(task, error, value) {

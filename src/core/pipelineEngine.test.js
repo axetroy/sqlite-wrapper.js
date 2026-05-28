@@ -47,6 +47,7 @@ function createTask(overrides = {}) {
 			reject,
 			consumerError: null,
 			stderrText: "",
+			settled: false,
 			timer: null,
 			startTime: 0,
 			rowParser: null,
@@ -605,6 +606,101 @@ describe("PipelineEngine", () => {
 			await flush();
 			const result = await promise;
 			assert.equal(result, undefined);
+		});
+	});
+
+	// ── 单任务超时 ────────────────────────────────────
+
+	describe("单任务超时", () => {
+		test("超时只拒绝超时任务，其他 inflight 任务正常完成", async () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+				onTaskTimeout: (task) => { timeouts.push(task); },
+			});
+			localEngine.activate();
+
+			const { task: t1, promise: p1 } = createTask({
+				token: "to-t1",
+				timeout: 1,
+			});
+			const { task: t2, promise: p2 } = createTask({
+				token: "to-t2",
+			});
+			const { task: t3, promise: p3 } = createTask({
+				token: "to-t3",
+			});
+
+			localEngine.enqueue(t1);
+			localEngine.enqueue(t2);
+			localEngine.enqueue(t3);
+
+			// 等待 t1 超时
+			await new Promise((r) => setTimeout(r, 30));
+
+			// t1 应在 inflight 中等待它的 sentinel 到来后才能从 inflight 中移除
+			assert.equal(localEngine.pendingStatements, 3, "t1 超时后仍在 inflight(等 sentinel)");
+			assert.equal(timeouts.length, 1, "onTaskTimeout 只被调用了一次");
+			assert.equal(timeouts[0].token, "to-t1", "超时回调收到 t1");
+
+			// t1 的 sentinel 到达（sqlite3 完成了 t1 的执行）
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"to-t1"}]`);
+
+			// t1 已从 inflight 移除，t2/t3 仍在
+			assert.equal(localEngine.pendingStatements, 2, "t1 移除后 t2/t3 仍在 inflight");
+
+			// t2/t3 的 sentinel 到达
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"to-t2"}]`);
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"to-t3"}]`);
+			await flush();
+
+			await assert.rejects(p1, /timed out/, "t1 应因超时被拒绝");
+			const r2 = await p2;
+			const r3 = await p3;
+			assert.deepEqual(r2, [], "t2 应正常完成");
+			assert.deepEqual(r3, [], "t3 应正常完成");
+
+			localEngine.kill();
+		});
+
+		test("超时任务数据行不会污染后续任务", async () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+			});
+			localEngine.activate();
+
+			const { task: t1, promise: p1 } = createTask({
+				kind: "query",
+				token: "data-t1",
+				timeout: 1,
+			});
+			const { task: t2, promise: p2 } = createTask({
+				kind: "query",
+				token: "data-t2",
+			});
+
+			localEngine.enqueue(t1);
+			localEngine.enqueue(t2);
+
+			// 等 t1 超时
+			await new Promise((r) => setTimeout(r, 30));
+
+			// t1 的数据行 + sentinel 到达（t1 超时后，sqlite3 仍然会输出它的结果）
+			localEngine.handleStdoutChunk("[1]");
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"data-t1"}]`);
+
+			// t2 的数据行 + sentinel
+			localEngine.handleStdoutChunk("[2]");
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"data-t2"}]`);
+			await flush();
+
+			await assert.rejects(p1, /timed out/, "t1 拒绝");
+			const r2 = await p2;
+			// t2 只应收到它自己的数据 [2]，不应包含 t1 的 [1]
+			assert.deepEqual(r2, [2], "t2 收到正确数据行，无污染");
+
+			localEngine.kill();
 		});
 	});
 

@@ -4,7 +4,7 @@ import { VALID_TRANSACTION_MODES, createTransactionHandle } from "../transaction
 import { ProcessManager } from "./process.js";
 import { toError } from "./parser.js";
 import { generateToken } from "../utils/token.js";
-import { createTimeoutError } from "../utils/timeout.js";
+
 import { setupStreamParser, AsyncRowBuffer } from "../stream/stream.js";
 import { interpolateSQL } from "../utils/interpolate.js";
 import { normalizeSQL } from "../utils/normalize.js";
@@ -63,9 +63,6 @@ export class SQLiteExecutor {
 			logger: this.#logger,
 			onTaskTimeout: (task) => {
 				this.#metrics.incrementTasksTimeout();
-				this.#handleProcessFailure(
-					createTimeoutError(task.timeout, task.sql),
-				);
 			},
 		});
 		this.#startProcess();
@@ -308,9 +305,10 @@ export class SQLiteExecutor {
 				sqlNormalized,
 				resolve,
 				reject,
-				consumerError: null,
-				stderrText: "",
-				timer: null,
+			consumerError: null,
+			stderrText: "",
+			settled: false,
+			timer: null,
 				startTime: 0,
 				rowParser: null,
 			};

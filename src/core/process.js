@@ -118,7 +118,7 @@ export class ProcessManager {
 		if (!proc) return;
 
 		const timer = setTimeout(() => {
-			this.kill();
+			proc.kill();
 		}, GRACEFUL_SHUTDOWN_TIMEOUT);
 
 		try {

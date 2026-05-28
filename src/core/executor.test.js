@@ -558,12 +558,12 @@ describe("SQLiteExecutor", () => {
 	test("触发 SQL 超时后 tasksTimeout 指标递增", async () => {
 		const exec = new SQLiteExecutor({
 			binary: SQLite3BinaryFile,
-			statementTimeout: 200,
+			statementTimeout: 1,
 		});
 		try {
 			await assert.rejects(
-				exec.execute("SELECT randomblob(500000000)"),
-				{ message: /timed out after 200ms/ },
+				exec.execute("SELECT randomblob(100000000)"),
+				{ message: /timed out after 1ms/ },
 			);
 			assert.equal(exec.metrics.tasksTimeout, 1);
 		} finally {
