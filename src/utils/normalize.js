@@ -28,7 +28,10 @@ export function normalizeSQL(sql) {
 
 	const needed = len + 1;
 	if (_normBuf.length < needed) {
-		_normBuf = new Uint16Array(needed * 2);
+		// 初始 1024 对绝大多数 SQL 已足够；当遇到超长 SQL 时按需精确分配。
+		// 不预留额外空间，因为重复的 SQL 会被 LRU 缓存命中（256 条），
+		// 不会频繁触发扩容。
+		_normBuf = new Uint16Array(needed);
 	}
 
 	const outCodes = _normBuf;
