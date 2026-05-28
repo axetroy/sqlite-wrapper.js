@@ -200,6 +200,25 @@ describe("TaskWorker", () => {
 		await assert.rejects(p, /killed/i);
 	});
 
+	test("进程异常退出（SIGKILL）后拒绝待处理任务", async () => {
+		const p = new Promise((resolve, reject) => {
+			worker.enqueue({
+				kind: "query",
+				sql: "SELECT 1",
+				timeout: 30000,
+				token: "tok-crash",
+				onRow: null,
+				resolve,
+				reject,
+			});
+		});
+		// 等待任务被发送到进程
+		await new Promise((r) => setImmediate(r));
+		// 外部 kill 进程（不经过 worker.kill()）
+		worker._process.kill("SIGKILL");
+		await assert.rejects(p, /exited unexpectedly/);
+	});
+
 	test("idle 在无任务时返回 true", () => {
 		assert.equal(worker.idle, true);
 	});

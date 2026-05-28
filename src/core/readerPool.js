@@ -52,6 +52,11 @@ export class ReaderPool {
 		worker.enqueue(task);
 	}
 
+	/** 测试用：获取内部 worker 列表。 */
+	get _workers() {
+		return this.#workers;
+	}
+
 	/** 终止所有 reader 进程。 */
 	kill() {
 		for (const worker of this.#workers) {

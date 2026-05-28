@@ -91,4 +91,23 @@ describe("ReaderPool", () => {
 		pool.kill();
 		await assert.rejects(p, /killed/i);
 	});
+
+	test("reader 进程异常退出后拒绝待处理任务", async () => {
+		const p = new Promise((resolve, reject) => {
+			pool.enqueue({
+				kind: "query",
+				sql: "SELECT 1",
+				timeout: 30000,
+				token: "crash-tok",
+				onRow: null,
+				resolve,
+				reject,
+			});
+		});
+		await new Promise((r) => setImmediate(r));
+		// 拿到被选中的 worker 的进程并 kill
+		const worker = pool._workers[0];
+		worker._process.kill("SIGKILL");
+		await assert.rejects(p, /exited unexpectedly/);
+	});
 });

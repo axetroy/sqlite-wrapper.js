@@ -646,4 +646,46 @@ describe("SQLiteExecutor", () => {
 			assert.ok(Array.isArray(result.value));
 		}
 	});
+
+	test("进程异常退出后 autoRestart=true 自动重启", async () => {
+		const exec = new SQLiteExecutor({ binary: SQLite3BinaryFile, autoRestart: true });
+		try {
+			// 触发进程执行任务
+			await exec.execute("SELECT 1");
+			const proc = exec._process;
+			assert.ok(proc, "进程应正在运行");
+
+			// 外部 kill 进程
+			proc.kill("SIGKILL");
+
+			// 等待进程重启
+			await new Promise((r) => setTimeout(r, 500));
+			// 重启后基本查询应正常
+			const rows = await exec.query("SELECT 1 AS v");
+			assert.deepEqual(rows, [{ v: 1 }]);
+		} finally {
+			await exec.close();
+		}
+	});
+
+	test("进程异常退出后 autoRestart=false 后续请求被拒绝", async () => {
+		const exec = new SQLiteExecutor({ binary: SQLite3BinaryFile, autoRestart: false });
+		try {
+			const p = exec.execute("SELECT 1");
+			const proc = exec._process;
+			assert.ok(proc, "进程应正在运行");
+
+			proc.kill("SIGKILL");
+
+			await assert.rejects(p, /exited unexpectedly/);
+
+			// 后续请求也应被拒绝
+			await assert.rejects(
+				exec.query("SELECT 1"),
+				(err) => err instanceof Error,
+			);
+		} finally {
+			await exec.close();
+		}
+	});
 });

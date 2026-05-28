@@ -92,6 +92,11 @@ export class TaskWorker {
 		this.#pumpQueue();
 	}
 
+	/** 测试用：获取底层子进程引用。 */
+	get _process() {
+		return this.#processManager.process;
+	}
+
 	/** 终止进程并清理。 */
 	kill() {
 		this.#rejectAll(new Error(`${this.#name} is killed`));

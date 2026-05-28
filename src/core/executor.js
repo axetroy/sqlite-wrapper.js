@@ -97,6 +97,11 @@ export class SQLiteExecutor {
 		return this.#readerPool;
 	}
 
+	/** 测试用：获取底层子进程引用。 */
+	get _process() {
+		return this.#proc;
+	}
+
 	/** 运行时指标收集器。 */
 	get metrics() {
 		return this.#metrics;
