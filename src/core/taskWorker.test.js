@@ -283,6 +283,7 @@ describe("TaskWorker", () => {
 		});
 
 		test("进程异常退出（SIGKILL）后拒绝待处理任务", async () => {
+			worker._process.stdout.pause();
 			const p = new Promise((resolve, reject) => {
 				worker.enqueue({
 					kind: "query",
@@ -294,7 +295,6 @@ describe("TaskWorker", () => {
 					reject,
 				});
 			});
-			await new Promise((r) => setImmediate(r));
 			worker._process.kill("SIGKILL");
 			await assert.rejects(p, /exited unexpectedly/);
 		});

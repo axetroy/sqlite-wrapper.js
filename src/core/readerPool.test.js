@@ -98,6 +98,8 @@ describe("ReaderPool", () => {
 		});
 
 		test("reader 进程异常退出后拒绝待处理任务", async () => {
+			const worker = pool._workers[0];
+			worker._process.stdout.pause();
 			const p = new Promise((resolve, reject) => {
 				pool.enqueue({
 					kind: "query",
@@ -109,8 +111,6 @@ describe("ReaderPool", () => {
 					reject,
 				});
 			});
-			await new Promise((r) => setImmediate(r));
-			const worker = pool._workers[0];
 			worker._process.kill("SIGKILL");
 			await assert.rejects(p, /exited unexpectedly/);
 		});
