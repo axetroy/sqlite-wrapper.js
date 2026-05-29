@@ -28,6 +28,8 @@ export class TaskWorker {
 	#batchSize;
 	#maxInflight;
 	#metrics;
+	#sweepTimer = null;
+	#sweepIntervalMs;
 
 	/**
 	 * @param {{
@@ -39,15 +41,17 @@ export class TaskWorker {
 	 *   initMode?: "wal" | "none"
 	 *   batchSize?: number
 	 *   metrics?: import("./metrics.js").Metrics
+	 *   sweepInterval?: number
 	 * }} options
 	 */
-	constructor({ binary, database, statementTimeout, logger, name, initMode, batchSize = DEFAULT_BATCH_SIZE, maxInflight = DEFAULT_MAX_INFLIGHT, metrics }) {
+	constructor({ binary, database, statementTimeout, logger, name, initMode, batchSize = DEFAULT_BATCH_SIZE, maxInflight = DEFAULT_MAX_INFLIGHT, metrics, sweepInterval = 100 }) {
 		this.#name = name ?? "worker";
 		this.#statementTimeout = statementTimeout;
 		this.#logger = logger;
 		this.#batchSize = batchSize;
 		this.#maxInflight = maxInflight;
 		this.#metrics = metrics;
+		this.#sweepIntervalMs = sweepInterval;
 		this.#processManager = new ProcessManager({ binary, database, initMode, onDrain: () => this.#pumpQueue() });
 		this.#valueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
 		this.#startProcess();
@@ -93,6 +97,11 @@ export class TaskWorker {
 		this.#pumpQueue();
 	}
 
+	/** 测试用：获取扫制定时器引用。 */
+	get _sweepTimer() {
+		return this.#sweepTimer;
+	}
+
 	/** 测试用：获取底层子进程引用。 */
 	get _process() {
 		return this.#processManager.process;
@@ -100,6 +109,8 @@ export class TaskWorker {
 
 	/** 终止进程并清理。 */
 	kill() {
+		clearTimeout(this.#sweepTimer);
+		this.#sweepTimer = null;
 		this.#rejectAll(new Error(`${this.#name} is killed`));
 		this.#processManager.kill();
 	}
@@ -157,9 +168,9 @@ export class TaskWorker {
 
 		for (const task of batch) {
 			task.startTime = now;
-			task.timer = setTimeout(() => this.#handleTaskTimeout(task), task.timeout ?? this.#statementTimeout);
 		}
 		this.#inflightTasks.push(...batch);
+		this.#scheduleSweep();
 		this.#processManager.write(payload);
 	}
 
@@ -173,7 +184,6 @@ export class TaskWorker {
 
 		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
 		if (isSentinelRaw(raw, task.sentinelStr)) {
-			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
 			if (task.timedout) {
@@ -214,7 +224,6 @@ export class TaskWorker {
 		}
 
 		if (isSentinelRow(parsed, task.token)) {
-			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
 			if (task.timedout) {
@@ -271,6 +280,24 @@ export class TaskWorker {
 		task.stderrText += String(chunk);
 	}
 
+	#scheduleSweep() {
+		if (this.#sweepTimer) return;
+		this.#sweepTimer = setTimeout(() => {
+			this.#sweepTimer = null;
+			const inflight = this.#inflightTasks;
+			const now = performance.now();
+			for (let i = 0; i < inflight.length; i++) {
+				const task = inflight[i];
+				if (now - task.startTime > task.timeout) {
+					this.#handleTaskTimeout(task);
+				}
+			}
+			if (this.#inflightTasks.length > 0) {
+				this.#scheduleSweep();
+			}
+		}, this.#sweepIntervalMs).unref();
+	}
+
 	#handleTaskTimeout(task) {
 		const error = prepareTaskTimeout(task, this.#metrics);
 		if (error) this.#settleTask(task, error, undefined);
@@ -281,6 +308,9 @@ export class TaskWorker {
 	}
 
 	#rejectAll(error) {
+		clearTimeout(this.#sweepTimer);
+		this.#sweepTimer = null;
+
 		const all = this.#inflightTasks;
 		this.#inflightTasks = [];
 

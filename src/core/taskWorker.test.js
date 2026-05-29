@@ -302,10 +302,21 @@ describe("TaskWorker", () => {
 
 	describe("超时", () => {
 		test("超时只拒绝超时任务，其他 inflight 任务正常完成", { timeout: 30000 }, async () => {
+			// sweep timer 默认 100ms，将超时检测延迟最多 100ms。
+			// 为加速测试，使用短 sweepInterval (5ms) 配合 5MB blob，
+			// 确保 sweep 在 SQL 完成前检测到 10ms timeout。
+			const tw = new TaskWorker({
+				binary: SQLite3BinaryFile,
+				database: ":memory:",
+				statementTimeout: 30000,
+				name: "tw-timeout",
+				sweepInterval: 5,
+			});
+
 			const p1 = new Promise((resolve, reject) => {
-				worker.enqueue({
+				tw.enqueue({
 					kind: "execute",
-					sql: "SELECT randomblob(1000000)",
+					sql: "SELECT randomblob(5000000)",
 					timeout: 10,
 					token: "tok-to-1",
 					onRow: null,
@@ -315,7 +326,7 @@ describe("TaskWorker", () => {
 			});
 
 			const p2 = new Promise((resolve, reject) => {
-				worker.enqueue({
+				tw.enqueue({
 					kind: "query",
 					sql: "SELECT 1 AS v",
 					timeout: 30000,
@@ -327,7 +338,7 @@ describe("TaskWorker", () => {
 			});
 
 			const p3 = new Promise((resolve, reject) => {
-				worker.enqueue({
+				tw.enqueue({
 					kind: "query",
 					sql: "SELECT 2 AS v",
 					timeout: 30000,
@@ -346,6 +357,8 @@ describe("TaskWorker", () => {
 			assert.deepEqual(results[1].value, [{ v: 1 }], "t2 结果正确");
 			assert.equal(results[2].status, "fulfilled", "t3 应正常完成");
 			assert.deepEqual(results[2].value, [{ v: 2 }], "t3 结果正确");
+
+			tw.kill();
 		});
 	});
 
