@@ -294,7 +294,7 @@ export class TaskWorker {
 	}
 
 	#handleStderrChunk(chunk) {
-		const task = this.#firstInflight() ?? this.#pendingFinalizeTasks.values().next().value;
+		const task = this.#pendingFinalizeTasks.values().next().value ?? this.#firstInflight();
 		if (!task) {
 			this.#logger?.error?.(chunk.trim());
 			return;
