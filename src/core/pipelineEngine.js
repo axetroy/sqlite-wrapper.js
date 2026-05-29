@@ -258,10 +258,10 @@ export class PipelineEngine {
 		// 被正确归因到原始任务，而非下一个 inflight 任务。
 		const task = this.#pendingFinalizeTasks.values().next().value ?? this.#inflightTasks[0];
 		if (!task) {
-			this.#logger?.error?.(String(chunk).trim());
+			this.#logger?.error?.(chunk.trim());
 			return;
 		}
-		task.stderrText += String(chunk);
+		task.stderrText += chunk;
 	}
 
 	/**

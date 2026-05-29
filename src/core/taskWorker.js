@@ -87,8 +87,6 @@ export class TaskWorker {
 			consumerError: null,
 			stderrText: "",
 			settled: false,
-			errorScheduled: false,
-			timer: null,
 			startTime: 0,
 			sentinelStr: buildSentinelStr(config.token),
 		};
@@ -274,10 +272,10 @@ export class TaskWorker {
 	#handleStderrChunk(chunk) {
 		const task = this.#inflightTasks[0] ?? this.#pendingFinalizeTasks.values().next().value;
 		if (!task) {
-			this.#logger?.error?.(String(chunk).trim());
+			this.#logger?.error?.(chunk.trim());
 			return;
 		}
-		task.stderrText += String(chunk);
+		task.stderrText += chunk;
 	}
 
 	#scheduleSweep() {

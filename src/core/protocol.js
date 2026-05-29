@@ -26,19 +26,19 @@ export function buildPayload(sql, token, { skipNormalize = false } = {}) {
  * @returns {boolean}
  */
 function isTransactionControl(sql) {
-	// task.sql 已经过 normalizeSQL 去除首尾空白，trim() 冗余但保留防御
-	const s = sql.toUpperCase();
-	return (
-		s === "BEGIN" ||
-		s === "BEGIN TRANSACTION" ||
-		s === "COMMIT" ||
-		s === "COMMIT TRANSACTION" ||
-		s === "ROLLBACK" ||
-		s === "ROLLBACK TRANSACTION" ||
-		s.startsWith("BEGIN ") ||
-		s.startsWith("COMMIT ") ||
-		s.startsWith("ROLLBACK ")
-	);
+	// sql 经过 normalizeSQL 后关键词大小写不变；首 charCodeAt 快速失败避免字符串分配。
+	// 若首字母不是 B/C/R（事务关键字），直接返回 false。
+	const f = sql.charCodeAt(0);
+	if (f === 66 || f === 98) {
+		return sql === "BEGIN" || sql === "BEGIN;" || sql.startsWith("BEGIN ") || sql.startsWith("BEGIN;");
+	}
+	if (f === 67 || f === 99) {
+		return sql === "COMMIT" || sql === "COMMIT;" || sql.startsWith("COMMIT ") || sql.startsWith("COMMIT;");
+	}
+	if (f === 82 || f === 114) {
+		return sql === "ROLLBACK" || sql === "ROLLBACK;" || sql.startsWith("ROLLBACK ") || sql.startsWith("ROLLBACK;");
+	}
+	return false;
 }
 
 /**

@@ -286,7 +286,6 @@ export class SQLiteExecutor {
 		const normalized = normalizeSQL(sql);
 
 		let formatted;
-		let sqlNormalized = true;
 		if (params.length === 0 && !normalized.includes("?")) {
 			formatted = normalized;
 		} else {
@@ -294,7 +293,7 @@ export class SQLiteExecutor {
 		}
 
 		if (scopeId) {
-			return this.#enqueueWriter(kind, formatted, timeout, token, onRow, scopeId, sqlNormalized);
+			return this.#enqueueWriter(kind, formatted, timeout, token, onRow, scopeId);
 		}
 
 		if (this.#readerPool) {
@@ -306,10 +305,10 @@ export class SQLiteExecutor {
 			}
 		}
 
-		return this.#enqueueWriter(kind, formatted, timeout, token, onRow, null, sqlNormalized);
+		return this.#enqueueWriter(kind, formatted, timeout, token, onRow, null);
 	}
 
-	#enqueueWriter(kind, sql, timeout, token, onRow, scopeId, sqlNormalized = false) {
+	#enqueueWriter(kind, sql, timeout, token, onRow, scopeId) {
 		this.#metrics.incrementTasksTotal(kind);
 		return new Promise((resolve, reject) => {
 			const task = {
@@ -319,13 +318,11 @@ export class SQLiteExecutor {
 				token,
 				onRow,
 				scopeId,
-				sqlNormalized,
 				resolve,
 				reject,
 				consumerError: null,
 				stderrText: "",
 				settled: false,
-				timer: null,
 				startTime: 0,
 				rowParser: null,
 				rows: kind === "query" ? [] : null,
