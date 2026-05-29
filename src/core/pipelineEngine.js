@@ -316,6 +316,8 @@ export class PipelineEngine {
 	 * @param {Error} error
 	 */
 	rejectAll(error) {
+		this.#sharedValueParser.reset();
+
 		const all = this.#inflightTasks;
 		this.#inflightTasks = [];
 

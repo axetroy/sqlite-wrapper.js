@@ -1095,6 +1095,9 @@ describe("PipelineEngine", () => {
 				engine.handleStdoutChunk(s);
 			}
 
+			// 随机字节可能破坏 sharedValueParser 状态机（inString=true / nesting>0），
+			// 导致 sentinel 被吞掉。重置解析器确保后续数据被正确处理。
+			engine.activate();
 			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"fuzz-stdout"}]`);
 			await flush();
 			disarm(task);
@@ -1114,6 +1117,7 @@ describe("PipelineEngine", () => {
 				engine.handleStderrChunk(s);
 			}
 
+			engine.activate();
 			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"fuzz-stderr"}]`);
 			await flush();
 			disarm(task);
@@ -1137,6 +1141,7 @@ describe("PipelineEngine", () => {
 				}
 			}
 
+			engine.activate();
 			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"fuzz-mixed"}]`);
 			await flush();
 			disarm(task);
