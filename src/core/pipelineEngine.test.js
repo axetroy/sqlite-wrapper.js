@@ -5,7 +5,7 @@ import { PipelineEngine } from "./pipelineEngine.js";
 import { Metrics } from "./metrics.js";
 import { TOKEN_COLUMN } from "./protocol.js";
 import { Queue } from "./queue.js";
-import { createRowStreamParser } from "./parser.js";
+import { createRowStreamParser, toError } from "./parser.js";
 
 /**
  * 创建一个存根 ProcessManager，记录 write 调用。
@@ -797,6 +797,54 @@ describe("PipelineEngine", () => {
 			const r2 = await p2;
 			// t2 只应收到它自己的数据 [2]，不应包含 t1 的 [1]
 			assert.deepEqual(r2, [2], "t2 收到正确数据行，无污染");
+
+			localEngine.kill();
+		});
+
+		test("超时的 stream 任务数据行不会触发 spurious onRow 调用", async () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+				sweepInterval: 5,
+			});
+			localEngine.activate();
+
+			const onRowCalls = [];
+
+			const { task, promise } = createTask({
+				kind: "stream",
+				token: "stream-timeout-test",
+				timeout: 1,
+				onRow: (row) => { onRowCalls.push(row); },
+			});
+			// 模拟 executor 的行为：为 stream 任务设置 rowParser
+			task.rowParser = createRowStreamParser((rawRow) => {
+				if (task.consumerError) return;
+				try {
+					const row = JSON.parse(rawRow);
+					// 不实现 sentinel 回喂逻辑，简化测试：onRow 被调用就等于 bug 触发
+					task.onRow(row);
+				} catch (error) {
+					task.consumerError = toError(error);
+				}
+			});
+
+			localEngine.enqueue(task);
+
+			// 等超时
+			await new Promise((r) => setTimeout(r, 30));
+
+			// 超时后，模拟 sqlite3 输出 stream 数据行和 sentinel
+			// 若不修复，handleStdoutChunk 会将数据喂给已 reset 的 rowParser 从而触发 onRow
+			localEngine.handleStdoutChunk("[1]");
+			localEngine.handleStdoutChunk("[2]");
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"stream-timeout-test"}]`);
+			await flush();
+
+			await assert.rejects(promise, /timed out/, "超时的 stream 任务应被拒绝");
+
+			// 断言：onRow 应从未被调用。若修复缺失，rowParser 会被重新激活并解析 [1] [2]
+			assert.equal(onRowCalls.length, 0, "超时后不应触发 onRow 回调");
 
 			localEngine.kill();
 		});

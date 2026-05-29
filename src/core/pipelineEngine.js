@@ -41,7 +41,18 @@ export class PipelineEngine {
 	 *   onTaskTimeout?: (task: object) => void,
 	 * }} options
 	 */
-	constructor(processManager, { metrics, statementTimeout, logger, batchSize = DEFAULT_BATCH_SIZE, maxInflight = DEFAULT_MAX_INFLIGHT, onTaskTimeout, sweepInterval = 100 }) {
+	constructor(
+		processManager,
+		{
+			metrics,
+			statementTimeout,
+			logger,
+			batchSize = DEFAULT_BATCH_SIZE,
+			maxInflight = DEFAULT_MAX_INFLIGHT,
+			onTaskTimeout,
+			sweepInterval = 100,
+		},
+	) {
 		this.#processManager = processManager;
 		this.#metrics = metrics;
 		this.#statementTimeout = statementTimeout;
@@ -115,11 +126,7 @@ export class PipelineEngine {
 		if (this.#inflightTasks.length >= this.#maxInflight) return;
 
 		const batch = [];
-		while (
-			batch.length < this.#batchSize &&
-			!this.#queue.isEmpty() &&
-			this.#inflightTasks.length + batch.length < this.#maxInflight
-		) {
+		while (batch.length < this.#batchSize && !this.#queue.isEmpty() && this.#inflightTasks.length + batch.length < this.#maxInflight) {
 			const task = this.#queue.peek();
 			if (task.kind === "stream" && (batch.length > 0 || this.#inflightTasks.length > 0)) break;
 			this.#queue.dequeue();
@@ -148,7 +155,10 @@ export class PipelineEngine {
 		const task = this.#inflightTasks[0];
 		if (!task) return;
 
-		if (task.kind === "stream" && task.rowParser && !task.rowParser.finished) {
+		// 已超时的 stream 任务：禁止继续喂给 rowParser（rowParser.reset 后 finished=false，
+		// 否则会触发 spurious onRow 回调）。数据直接走 sharedValueParser 由
+		// #handleParsedValue 中的 task.timedout 短路丢弃。
+		if (task.kind === "stream" && task.rowParser && !task.rowParser.finished && !task.timedout) {
 			const leftover = task.rowParser.feed(chunk);
 			if (leftover) this.#sharedValueParser.feed(leftover);
 			return;
@@ -262,7 +272,11 @@ export class PipelineEngine {
 		this.#scheduledFinalize = true;
 		setImmediate(() => {
 			this.#scheduledFinalize = false;
-			finalizePendingTasks(this.#pendingFinalizeTasks, (t, e, v) => this.#settleTask(t, e, v), () => this.#pumpQueue());
+			finalizePendingTasks(
+				this.#pendingFinalizeTasks,
+				(t, e, v) => this.#settleTask(t, e, v),
+				() => this.#pumpQueue(),
+			);
 		});
 	}
 
@@ -291,7 +305,6 @@ export class PipelineEngine {
 			this.#onTaskTimeout?.(task);
 		}
 	}
-
 
 	#settleTask(task, error, value) {
 		settleTask(task, error, value, this.#metrics, { resetRowParser: true });
