@@ -77,16 +77,6 @@ export function buildBatchPayload(batch) {
 	return parts.join("");
 }
 
-/**
- * 通过原始字符串模式检测 sentinel 行，避免 JSON.parse。
- * sentinel 原始格式固定为 [{"__sqlite_executor_token__":"TOKEN"}]，
- * token 由 crypto.randomUUID() 生成（hex UUID，不含特殊 JSON 字符），
- * 因此精确字符串匹配即可安全判断。
- *
- * @param {string} raw - 流式解析器提取的原始 JSON 文本
- * @param {string} token - 当前任务的唯一 token
- * @returns {boolean}
- */
 const TC_FIRST_CHAR = TOKEN_COLUMN.charCodeAt(0);
 
 /**
@@ -99,8 +89,21 @@ export function buildSentinelStr(token) {
 	return `[{"${TOKEN_COLUMN}":"${token}"}]`;
 }
 
-export function isSentinelRaw(raw, sentinelStr) {
-	return raw.charCodeAt(3) === TC_FIRST_CHAR && raw === sentinelStr;
+/**
+ * 通过原始字符串模式检测 sentinel 行，避免 JSON.parse。
+ * sentinel 原始格式固定为 [{"__sqlite_executor_token__":"TOKEN"}]，
+ * token 由 crypto.randomUUID() 生成（hex UUID，不含特殊 JSON 字符），
+ * 因此精确字符串匹配即可安全判断。
+ *
+ * 哨兵字符串在 isSentinelRaw 内部按需构建；外部调用只需传入 token。
+ * fast path 首先检查第 4 个字符是否匹配列名首字符，不匹配则快速返回 false。
+ *
+ * @param {string} raw - 流式解析器提取的原始 JSON 文本
+ * @param {string} token - 当前任务的唯一 token
+ * @returns {boolean}
+ */
+export function isSentinelRaw(raw, token) {
+	return raw.charCodeAt(3) === TC_FIRST_CHAR && raw === buildSentinelStr(token);
 }
 
 /**

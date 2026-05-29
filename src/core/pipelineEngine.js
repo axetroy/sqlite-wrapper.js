@@ -17,6 +17,7 @@ import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 export class PipelineEngine {
 	#queue = new Queue();
 	#inflightTasks = [];
+	#inflightHead = 0;
 	#pendingFinalizeTasks = new Set();
 	#scheduledFinalize = false;
 	#sharedValueParser;
@@ -82,7 +83,7 @@ export class PipelineEngine {
 
 	/** 当前待处理的任务总数（队列中 + 执行中 + pendingFinalize）。 */
 	get pendingStatements() {
-		return this.#queue.size + this.#inflightTasks.length + this.#pendingFinalizeTasks.size;
+		return this.#queue.size + (this.#inflightTasks.length - this.#inflightHead) + this.#pendingFinalizeTasks.size;
 	}
 
 	/**
@@ -115,6 +116,28 @@ export class PipelineEngine {
 		this.#pumpQueue();
 	}
 
+	#inflightCount() {
+		return this.#inflightTasks.length - this.#inflightHead;
+	}
+
+	#firstInflight() {
+		return this.#inflightHead < this.#inflightTasks.length ? this.#inflightTasks[this.#inflightHead] : null;
+	}
+
+	#shiftInflight() {
+		const task = this.#inflightTasks[this.#inflightHead];
+		this.#inflightTasks[this.#inflightHead] = null;
+		this.#inflightHead++;
+		if (this.#inflightHead >= this.#inflightTasks.length) {
+			this.#inflightTasks = [];
+			this.#inflightHead = 0;
+		} else if (this.#inflightHead > 128) {
+			this.#inflightTasks = this.#inflightTasks.slice(this.#inflightHead);
+			this.#inflightHead = 0;
+		}
+		return task;
+	}
+
 	/**
 	 * 从队列批量取出任务发送给 sqlite3 进程。
 	 * 非 stream 任务最多批量发送 DEFAULT_BATCH_SIZE 个；
@@ -123,12 +146,12 @@ export class PipelineEngine {
 	#pumpQueue() {
 		if (!this.#active) return;
 		if (this.#processManager.draining) return;
-		if (this.#inflightTasks.length >= this.#maxInflight) return;
+		if (this.#inflightCount() >= this.#maxInflight) return;
 
 		const batch = [];
-		while (batch.length < this.#batchSize && !this.#queue.isEmpty() && this.#inflightTasks.length + batch.length < this.#maxInflight) {
+		while (batch.length < this.#batchSize && !this.#queue.isEmpty() && this.#inflightCount() + batch.length < this.#maxInflight) {
 			const task = this.#queue.peek();
-			if (task.kind === "stream" && (batch.length > 0 || this.#inflightTasks.length > 0)) break;
+			if (task.kind === "stream" && (batch.length > 0 || this.#inflightCount() > 0)) break;
 			this.#queue.dequeue();
 			batch.push(task);
 		}
@@ -152,7 +175,7 @@ export class PipelineEngine {
 	 * @param {string} chunk
 	 */
 	handleStdoutChunk(chunk) {
-		const task = this.#inflightTasks[0];
+		const task = this.#firstInflight();
 		if (!task) return;
 
 		// 已超时的 stream 任务：禁止继续喂给 rowParser（rowParser.reset 后 finished=false，
@@ -174,12 +197,12 @@ export class PipelineEngine {
 	 * @param {string} raw
 	 */
 	#handleParsedValue(raw) {
-		const task = this.#inflightTasks[0];
+		const task = this.#firstInflight();
 		if (!task) return;
 
 		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
-		if (isSentinelRaw(raw, task.sentinelStr)) {
-			this.#inflightTasks.shift();
+		if (isSentinelRaw(raw, task.token)) {
+			this.#shiftInflight();
 
 			if (task.timedout) {
 				this.#pumpQueue();
@@ -214,7 +237,7 @@ export class PipelineEngine {
 		}
 
 		if (isSentinelRow(parsed, task.token)) {
-			this.#inflightTasks.shift();
+			this.#shiftInflight();
 
 			if (task.timedout) {
 				this.#pumpQueue();
@@ -256,7 +279,7 @@ export class PipelineEngine {
 	handleStderrChunk(chunk) {
 		// 优先匹配 pendingFinalize 任务，确保延迟到达的 stderr chunk
 		// 被正确归因到原始任务，而非下一个 inflight 任务。
-		const task = this.#pendingFinalizeTasks.values().next().value ?? this.#inflightTasks[0];
+		const task = this.#pendingFinalizeTasks.values().next().value ?? this.#firstInflight();
 		if (!task) {
 			this.#logger?.error?.(chunk.trim());
 			return;
@@ -284,15 +307,16 @@ export class PipelineEngine {
 		if (this.#sweepTimer) return;
 		this.#sweepTimer = setTimeout(() => {
 			this.#sweepTimer = null;
-			const inflight = this.#inflightTasks;
+			const tasks = this.#inflightTasks;
+			const head = this.#inflightHead;
 			const now = performance.now();
-			for (let i = 0; i < inflight.length; i++) {
-				const task = inflight[i];
+			for (let i = head; i < tasks.length; i++) {
+				const task = tasks[i];
 				if (now - task.startTime > task.timeout) {
 					this.#handleTaskTimeout(task);
 				}
 			}
-			if (this.#inflightTasks.length > 0) {
+			if (this.#inflightCount() > 0) {
 				this.#scheduleSweep();
 			}
 		}, this.#sweepIntervalMs).unref();
@@ -318,8 +342,10 @@ export class PipelineEngine {
 	rejectAll(error) {
 		this.#sharedValueParser.reset();
 
-		const all = this.#inflightTasks;
+		const activeCount = this.#inflightTasks.length - this.#inflightHead;
+		const all = activeCount > 0 ? this.#inflightTasks.slice(this.#inflightHead) : [];
 		this.#inflightTasks = [];
+		this.#inflightHead = 0;
 
 		for (const task of all) {
 			this.#settleTask(task, error, undefined);

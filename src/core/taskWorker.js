@@ -1,7 +1,7 @@
 import { ProcessManager } from "./process.js";
 import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
-import { isSentinelRaw, isSentinelRow, buildBatchPayload, buildSentinelStr } from "./protocol.js";
+import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { finalizePendingTasks, prepareTaskTimeout } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
@@ -19,6 +19,7 @@ export class TaskWorker {
 	#processManager;
 	#pendingQueue = new Queue();
 	#inflightTasks = [];
+	#inflightHead = 0;
 	#pendingFinalizeTasks = new Set();
 	#scheduledFinalize = false;
 	#valueParser;
@@ -62,11 +63,11 @@ export class TaskWorker {
 	}
 
 	get idle() {
-		return this.#inflightTasks.length === 0 && this.#pendingQueue.isEmpty() && this.#pendingFinalizeTasks.size === 0;
+		return this.#inflightTasks.length === this.#inflightHead && this.#pendingQueue.isEmpty() && this.#pendingFinalizeTasks.size === 0;
 	}
 
 	get pendingStatements() {
-		return this.#pendingQueue.size + this.#inflightTasks.length + this.#pendingFinalizeTasks.size;
+		return this.#pendingQueue.size + (this.#inflightTasks.length - this.#inflightHead) + this.#pendingFinalizeTasks.size;
 	}
 
 	/**
@@ -88,7 +89,6 @@ export class TaskWorker {
 			stderrText: "",
 			settled: false,
 			startTime: 0,
-			sentinelStr: buildSentinelStr(config.token),
 		};
 		this.#metrics?.incrementTasksTotal(config.kind);
 		this.#pendingQueue.enqueue(task);
@@ -139,22 +139,44 @@ export class TaskWorker {
 		});
 	}
 
+	#inflightCount() {
+		return this.#inflightTasks.length - this.#inflightHead;
+	}
+
+	#firstInflight() {
+		return this.#inflightHead < this.#inflightTasks.length ? this.#inflightTasks[this.#inflightHead] : null;
+	}
+
+	#shiftInflight() {
+		const task = this.#inflightTasks[this.#inflightHead];
+		this.#inflightTasks[this.#inflightHead] = null;
+		this.#inflightHead++;
+		if (this.#inflightHead >= this.#inflightTasks.length) {
+			this.#inflightTasks = [];
+			this.#inflightHead = 0;
+		} else if (this.#inflightHead > 128) {
+			this.#inflightTasks = this.#inflightTasks.slice(this.#inflightHead);
+			this.#inflightHead = 0;
+		}
+		return task;
+	}
+
 	/**
 	 * 从 pendingQueue 中取出最多 batchSize 个任务，合并 payload 后一次性写入 stdin。
 	 * stream 任务必须单独发送（不与其他任务合批），且需要等 inflight 清空后再发送。
 	 */
 	#pumpQueue() {
 		if (this.#processManager.draining) return;
-		if (this.#inflightTasks.length >= this.#maxInflight) return;
+		if (this.#inflightCount() >= this.#maxInflight) return;
 
 		const batch = [];
 		while (
 			batch.length < this.#batchSize &&
 			!this.#pendingQueue.isEmpty() &&
-			this.#inflightTasks.length + batch.length < this.#maxInflight
+			this.#inflightCount() + batch.length < this.#maxInflight
 		) {
 			const task = this.#pendingQueue.peek();
-			if (task.kind === "stream" && (batch.length > 0 || this.#inflightTasks.length > 0)) break;
+			if (task.kind === "stream" && (batch.length > 0 || this.#inflightCount() > 0)) break;
 			this.#pendingQueue.dequeue();
 			batch.push(task);
 		}
@@ -177,12 +199,12 @@ export class TaskWorker {
 	 * 按 FIFO 顺序匹配 inflightTasks[0] 的 sentinel token。
 	 */
 	#handleParsedValue(raw) {
-		const task = this.#inflightTasks[0];
+		const task = this.#firstInflight();
 		if (!task) return;
 
 		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
-		if (isSentinelRaw(raw, task.sentinelStr)) {
-			this.#inflightTasks.shift();
+		if (isSentinelRaw(raw, task.token)) {
+			this.#shiftInflight();
 
 			if (task.timedout) {
 				this.#pumpQueue();
@@ -222,7 +244,7 @@ export class TaskWorker {
 		}
 
 		if (isSentinelRow(parsed, task.token)) {
-			this.#inflightTasks.shift();
+			this.#shiftInflight();
 
 			if (task.timedout) {
 				this.#pumpQueue();
@@ -272,7 +294,7 @@ export class TaskWorker {
 	}
 
 	#handleStderrChunk(chunk) {
-		const task = this.#inflightTasks[0] ?? this.#pendingFinalizeTasks.values().next().value;
+		const task = this.#firstInflight() ?? this.#pendingFinalizeTasks.values().next().value;
 		if (!task) {
 			this.#logger?.error?.(chunk.trim());
 			return;
@@ -284,15 +306,16 @@ export class TaskWorker {
 		if (this.#sweepTimer) return;
 		this.#sweepTimer = setTimeout(() => {
 			this.#sweepTimer = null;
-			const inflight = this.#inflightTasks;
+			const tasks = this.#inflightTasks;
+			const head = this.#inflightHead;
 			const now = performance.now();
-			for (let i = 0; i < inflight.length; i++) {
-				const task = inflight[i];
+			for (let i = head; i < tasks.length; i++) {
+				const task = tasks[i];
 				if (now - task.startTime > task.timeout) {
 					this.#handleTaskTimeout(task);
 				}
 			}
-			if (this.#inflightTasks.length > 0) {
+			if (this.#inflightCount() > 0) {
 				this.#scheduleSweep();
 			}
 		}, this.#sweepIntervalMs).unref();
@@ -311,8 +334,10 @@ export class TaskWorker {
 		clearTimeout(this.#sweepTimer);
 		this.#sweepTimer = null;
 
-		const all = this.#inflightTasks;
+		const activeCount = this.#inflightTasks.length - this.#inflightHead;
+		const all = activeCount > 0 ? this.#inflightTasks.slice(this.#inflightHead) : [];
 		this.#inflightTasks = [];
+		this.#inflightHead = 0;
 
 		let queued = this.#pendingQueue.dequeue();
 		while (queued) {
