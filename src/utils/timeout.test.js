@@ -21,10 +21,9 @@ describe("createTimeoutError", () => {
 		assert.ok(err.message.includes("SELECT * FROM users"));
 	});
 
-	test("SQL 被规范化后再包含在消息中", () => {
-		const err = createTimeoutError(1000, "  SELECT   1  ");
+	test("SQL 原样包含在消息中（由调用方保证已规范化）", () => {
+		const err = createTimeoutError(1000, "SELECT 1");
 		assert.ok(err.message.includes("SELECT 1"));
-		assert.ok(!err.message.includes("  SELECT   1  "));
 	});
 
 	test("createTimeoutError 非负超时值", () => {

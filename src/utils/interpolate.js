@@ -122,6 +122,27 @@ function _parseTemplate(sql) {
 }
 
 /**
+ * 使用预解析的模板替换参数，避免重新扫描 SQL。
+ * @param {{ segments: string[], paramCount: number }} template
+ * @param {any[]} params
+ * @returns {string}
+ */
+export function interpolateFromTemplate(template, params) {
+	const { segments, paramCount } = template;
+	if (params.length < paramCount) throw new Error("Too few parameters provided");
+	if (params.length > paramCount) throw new Error("Too many parameters provided");
+
+	if (paramCount === 0) return segments[0];
+
+	const parts = [segments[0]];
+	for (let i = 0; i < params.length; i++) {
+		parts.push(escapeValue(params[i]));
+		parts.push(segments[i + 1]);
+	}
+	return parts.join("");
+}
+
+/**
  * 替换 SQL 语句中的 ? 为转义后的参数
  * @param {string} sql
  * @param {any[]} params
@@ -140,16 +161,5 @@ export function interpolateSQL(sql, params) {
 		_interpCache.set(sql, template);
 	}
 
-	const { segments, paramCount } = template;
-	if (params.length < paramCount) throw new Error("Too few parameters provided");
-	if (params.length > paramCount) throw new Error("Too many parameters provided");
-
-	if (paramCount === 0) return segments[0];
-
-	const parts = [segments[0]];
-	for (let i = 0; i < params.length; i++) {
-		parts.push(escapeValue(params[i]));
-		parts.push(segments[i + 1]);
-	}
-	return parts.join("");
+	return interpolateFromTemplate(template, params);
 }

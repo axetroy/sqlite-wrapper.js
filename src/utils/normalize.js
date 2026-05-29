@@ -6,6 +6,7 @@ import {
 	CC_SLASH,
 	CC_STAR,
 	CC_NEWLINE,
+	CC_QUESTION,
 	CC_SEMICOLON,
 	CC_SPACE,
 	STATE_NORMAL,
@@ -15,29 +16,18 @@ import {
 	STATE_BLOCK_COMMENT,
 } from "./constants.js";
 
-let _normBuf = new Uint16Array(1024);
 const _normDecoder = new TextDecoder("utf-16le");
 
 const _normCache = new LRUCache({ maxSize: 256, maxKeyLength: 4096 });
 
-export function normalizeSQL(sql) {
-	const cached = _normCache.get(sql);
-	if (cached !== undefined) return cached;
-
+function _normalize(sql) {
 	const len = sql.length;
-
 	const needed = len + 1;
-	if (_normBuf.length < needed) {
-		// 初始 1024 对绝大多数 SQL 已足够；当遇到超长 SQL 时按需精确分配。
-		// 不预留额外空间，因为重复的 SQL 会被 LRU 缓存命中（256 条），
-		// 不会频繁触发扩容。
-		_normBuf = new Uint16Array(needed);
-	}
-
-	const outCodes = _normBuf;
+	const outCodes = new Uint16Array(needed);
 	let writePos = 0;
 	let pendingSpace = false;
 	let state = STATE_NORMAL;
+	const questionPositions = [];
 
 	for (let i = 0; i < len; i++) {
 		const code = sql.charCodeAt(i);
@@ -82,6 +72,10 @@ export function normalizeSQL(sql) {
 			outCodes[writePos++] = CC_SPACE;
 			pendingSpace = false;
 		}
+
+		if (code === CC_QUESTION && state === STATE_NORMAL) {
+			questionPositions.push(writePos);
+		}
 		outCodes[writePos++] = code;
 
 		if (state === STATE_NORMAL) {
@@ -112,16 +106,42 @@ export function normalizeSQL(sql) {
 		}
 	}
 
-	let result;
+	let normalized;
 	if (writePos === 0) {
-		result = ";";
+		normalized = ";";
 	} else {
 		while (writePos > 0 && outCodes[writePos - 1] === CC_SEMICOLON) writePos--;
 		outCodes[writePos++] = CC_SEMICOLON;
-		result = _normDecoder.decode(outCodes.subarray(0, writePos));
+		normalized = _normDecoder.decode(outCodes.subarray(0, writePos));
 	}
 
-	_normCache.set(sql, result);
+	const paramCount = questionPositions.length;
+	if (paramCount === 0) {
+		return { normalized, segments: [normalized], paramCount: 0 };
+	}
 
+	const segments = [];
+	let segStart = 0;
+	for (const pos of questionPositions) {
+		segments.push(normalized.slice(segStart, pos));
+		segStart = pos + 1;
+	}
+	segments.push(normalized.slice(segStart));
+	return { normalized, segments, paramCount };
+}
+
+export function normalizeSQL(sql) {
+	const cached = _normCache.get(sql);
+	if (cached !== undefined) return cached.normalized;
+	const result = _normalize(sql);
+	_normCache.set(sql, result);
+	return result.normalized;
+}
+
+export function normalizeSQLTemplate(sql) {
+	const cached = _normCache.get(sql);
+	if (cached !== undefined) return cached;
+	const result = _normalize(sql);
+	_normCache.set(sql, result);
 	return result;
 }

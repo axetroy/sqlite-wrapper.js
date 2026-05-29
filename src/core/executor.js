@@ -6,8 +6,8 @@ import { toError } from "./parser.js";
 import { generateToken } from "../utils/token.js";
 
 import { setupStreamParser, AsyncRowBuffer } from "../stream/stream.js";
-import { interpolateSQL } from "../utils/interpolate.js";
-import { normalizeSQL } from "../utils/normalize.js";
+import { interpolateFromTemplate } from "../utils/interpolate.js";
+import { normalizeSQLTemplate } from "../utils/normalize.js";
 import { classifySQL } from "./classifier.js";
 import { buildSentinelStr } from "./protocol.js";
 import { ReaderPool } from "./readerPool.js";
@@ -283,13 +283,13 @@ export class SQLiteExecutor {
 		const token = generateToken();
 		const onRow = options?.onRow ?? null;
 
-		const normalized = normalizeSQL(sql);
+		const template = normalizeSQLTemplate(sql);
 
 		let formatted;
-		if (params.length === 0 && !normalized.includes("?")) {
-			formatted = normalized;
+		if (params.length === 0 && template.paramCount === 0) {
+			formatted = template.normalized;
 		} else {
-			formatted = interpolateSQL(normalized, params);
+			formatted = interpolateFromTemplate(template, params);
 		}
 
 		if (scopeId) {
@@ -300,7 +300,7 @@ export class SQLiteExecutor {
 			if (kind === "stream" || kind === "query") {
 				return this.#enqueueReader(kind, formatted, timeout, token, onRow);
 			}
-			if (kind === "execute" && classifySQL(normalized) === "read") {
+			if (kind === "execute" && classifySQL(template.normalized) === "read") {
 				return this.#enqueueReader(kind, formatted, timeout, token, onRow);
 			}
 		}

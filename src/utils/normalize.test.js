@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-import { normalizeSQL } from "./normalize.js";
+import { normalizeSQL, normalizeSQLTemplate } from "./normalize.js";
 
 describe("normalizeSQL", () => {
 	test("去除首尾空白、规范化空格并强制保留末尾分号", () => {
@@ -85,5 +85,54 @@ describe("normalizeSQL", () => {
 		const result = normalizeSQL(long);
 		assert.ok(result.endsWith(";"));
 		assert.ok(result.includes("FROM t"));
+	});
+});
+
+describe("normalizeSQLTemplate", () => {
+	test("无 ? 时返回 normalized 和 paramCount=0", () => {
+		const t = normalizeSQLTemplate("SELECT * FROM users");
+		assert.equal(t.normalized, "SELECT * FROM users;");
+		assert.equal(t.paramCount, 0);
+		assert.deepEqual(t.segments, ["SELECT * FROM users;"]);
+	});
+
+	test("含 ? 时正确追踪位置", () => {
+		const t = normalizeSQLTemplate("SELECT * FROM users WHERE id = ? AND name = ?");
+		assert.equal(t.normalized, "SELECT * FROM users WHERE id = ? AND name = ?;");
+		assert.equal(t.paramCount, 2);
+		assert.equal(t.segments.length, 3);
+		assert.equal(t.segments[0], "SELECT * FROM users WHERE id = ");
+		assert.equal(t.segments[1], " AND name = ");
+		assert.equal(t.segments[2], ";");
+	});
+
+	test("字符串内的 ? 不被追踪", () => {
+		const t = normalizeSQLTemplate("SELECT '?' AS q");
+		assert.equal(t.normalized, "SELECT '?' AS q;");
+		assert.equal(t.paramCount, 0);
+	});
+
+	test("注释内的 ? 不被追踪", () => {
+		const t = normalizeSQLTemplate("SELECT 1 -- ?\nFROM t WHERE id = ?");
+		assert.equal(t.normalized, "SELECT 1 FROM t WHERE id = ?;");
+		assert.equal(t.paramCount, 1);
+	});
+
+	test("只有一个 ?", () => {
+		const t = normalizeSQLTemplate("DELETE FROM t WHERE id = ?");
+		assert.equal(t.paramCount, 1);
+		assert.equal(t.segments[0], "DELETE FROM t WHERE id = ");
+		assert.equal(t.segments[1], ";");
+	});
+
+	test("多次调用缓存命中返回相同对象", () => {
+		const a = normalizeSQLTemplate("SELECT 1");
+		const b = normalizeSQLTemplate("SELECT 1");
+		assert.equal(a, b);
+	});
+
+	test("与 normalizeSQL 结果一致", () => {
+		const raw = "  SELECT   *   FROM   users  WHERE  id  =  1  ;; ";
+		assert.equal(normalizeSQLTemplate(raw).normalized, normalizeSQL(raw));
 	});
 });

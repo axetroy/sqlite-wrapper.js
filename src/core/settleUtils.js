@@ -7,9 +7,10 @@ import { toError } from "./parser.js";
  */
 export function collectQueryRows(task, parsed) {
 	if (Array.isArray(parsed)) {
-		// 延迟初始化 rows 数组（query 任务在 enqueue 时已创建，此分支仅防御性保障）
 		if (!task.rows) task.rows = [];
-		task.rows.push(...parsed);
+		for (let i = 0; i < parsed.length; i++) {
+			task.rows.push(parsed[i]);
+		}
 	}
 }
 
