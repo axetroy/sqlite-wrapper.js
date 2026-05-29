@@ -86,8 +86,10 @@ export function buildBatchPayload(batch) {
  * @param {string} token - 当前任务的唯一 token
  * @returns {boolean}
  */
+const TC_FIRST_CHAR = TOKEN_COLUMN.charCodeAt(0);
+
 export function isSentinelRaw(raw, token) {
-	return raw === `[{"${TOKEN_COLUMN}":"${token}"}]`;
+	return raw.charCodeAt(3) === TC_FIRST_CHAR && raw === `[{"${TOKEN_COLUMN}":"${token}"}]`;
 }
 
 /**
