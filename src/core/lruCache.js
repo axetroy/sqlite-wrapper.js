@@ -10,15 +10,17 @@
 export class LRUCache {
 	#maxSize;
 	#maxKeyLength;
+	#maxValueLength;
 	/** @type {Map<string, T>} */
 	#map = new Map();
 
 	/**
-	 * @param {{ maxSize?: number, maxKeyLength?: number }} [options]
+	 * @param {{ maxSize?: number, maxKeyLength?: number, maxValueLength?: number }} [options]
 	 */
-	constructor({ maxSize = 256, maxKeyLength = 4096 } = {}) {
+	constructor({ maxSize = 256, maxKeyLength = 4096, maxValueLength = Infinity } = {}) {
 		this.#maxSize = Math.max(1, maxSize);
 		this.#maxKeyLength = maxKeyLength;
+		this.#maxValueLength = maxValueLength;
 	}
 
 	/**
@@ -42,6 +44,7 @@ export class LRUCache {
 	 */
 	set(key, value) {
 		if (typeof key !== "string" || key.length > this.#maxKeyLength) return;
+		if (value && value.length > this.#maxValueLength) return;
 		if (this.#map.size >= this.#maxSize) {
 			const firstKey = this.#map.keys().next().value;
 			this.#map.delete(firstKey);

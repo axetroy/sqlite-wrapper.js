@@ -45,6 +45,15 @@ describe("LRUCache", () => {
 		assert.equal(c.get("abcde"), "v");
 	});
 
+	test("超长的 value 不缓存", () => {
+		const c = new LRUCache({ maxValueLength: 5 });
+		c.set("k", "abcdef");
+		assert.equal(c.get("k"), undefined);
+
+		c.set("k", "abcde");
+		assert.equal(c.get("k"), "abcde");
+	});
+
 	test("非字符串 key 不缓存", () => {
 		const c = new LRUCache({ maxSize: 3 });
 		c.set(123, "v");
