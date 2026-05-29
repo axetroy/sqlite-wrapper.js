@@ -247,6 +247,8 @@ export class TaskWorker {
 			return;
 		}
 
+		if (task.timedout) return;
+
 		if (task.kind === "query") {
 			collectQueryRows(task, parsed);
 			return;

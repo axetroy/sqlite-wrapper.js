@@ -54,7 +54,7 @@ export class TransactionScope {
 		const previous = this.#scopeChain;
 		// 将前一个 scopeChain 的 reject 吞掉，避免未捕获的 reject 传播。
 		// 前一个事务可能因 ROLLBACK 而 reject，这不应影响当前事务的等待。
-		this.#scopeChain = previous.catch(() => {}).then(() => gate);
+		this.#scopeChain = gate;
 		await previous.catch(() => {});
 
 		this.#activeScopeId = scopeId;

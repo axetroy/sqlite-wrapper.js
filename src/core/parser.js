@@ -76,69 +76,82 @@ export function createJsonValueParser(onValue) {
 			this.buffer += chunk;
 			let consumeUntil = 0;
 
+			// 将状态缓存到局部变量，避免热循环中反复访问 this.* 引发的隐藏类查找
+			const buffer = this.buffer;
+			let start = this.start;
+			let nesting = this.nesting;
+			let inString = this.inString;
+			let escaped = this.escaped;
+
 			// 2. 从上次处理到的位置继续扫描
-			for (let index = this.readPos; index < this.buffer.length; index++) {
-				const code = this.buffer.charCodeAt(index);
+			for (let index = this.readPos; index < buffer.length; index++) {
+				const code = buffer.charCodeAt(index);
 
 				// === 状态 A：未开始解析顶层值，跳过空白，寻找 [ 或 { ===
-				if (this.start === -1) {
+				if (start === -1) {
 					if (isWhitespaceCode(code)) continue;
 					if (code !== CHAR_OPEN_BRACKET && code !== CHAR_OPEN_BRACE) continue;
 					// 找到顶层值的起始位置，初始化嵌套计数
-					this.start = index;
-					this.nesting = 1;
-					this.inString = false;
-					this.escaped = false;
+					start = index;
+					nesting = 1;
+					inString = false;
+					escaped = false;
 					continue;
 				}
 
 				// === 状态 B：在字符串内部，处理转义序列 ===
-				if (this.inString) {
-					if (this.escaped) {
+				if (inString) {
+					if (escaped) {
 						// 前一个字符是反斜杠，当前字符被转义，重置 escaped
-						this.escaped = false;
+						escaped = false;
 					} else if (code === CHAR_BACKSLASH) {
 						// 遇到反斜杠，标记下一个字符为转义状态
-						this.escaped = true;
+						escaped = true;
 					} else if (code === CHAR_QUOTE) {
 						// 遇到未转义的双引号，字符串结束
-						this.inString = false;
+						inString = false;
 					}
 					continue;
 				}
 
 				// === 状态 C：不在字符串内，遇到双引号则进入字符串 ===
 				if (code === CHAR_QUOTE) {
-					this.inString = true;
+					inString = true;
 					continue;
 				}
 
 				// === 状态 D：不在字符串内，处理嵌套结构 ===
 				if (code === CHAR_OPEN_BRACKET || code === CHAR_OPEN_BRACE) {
 					// 进入一层嵌套
-					this.nesting++;
+					nesting++;
 					continue;
 				}
 
 				if (code === CHAR_CLOSE_BRACKET || code === CHAR_CLOSE_BRACE) {
 					// 退出一层嵌套
-					this.nesting--;
-					if (this.nesting === 0) {
+					nesting--;
+					if (nesting === 0) {
 						// 嵌套归零 → 一个完整的顶层 JSON 值解析完成
 						// Fast path: 空数组 []，index === start + 1，无需 slice 和回调
-						if (index === this.start + 1) {
-							this.start = -1;
+						if (index === start + 1) {
+							start = -1;
 							consumeUntil = index + 1;
 							continue;
 						}
 						// 正常路径：切片出完整 JSON 文本，通过回调通知
-						const raw = this.buffer.slice(this.start, index + 1);
-						this.start = -1;
+						const raw = buffer.slice(start, index + 1);
+						start = -1;
 						onValue(raw);
 						consumeUntil = index + 1;
 					}
 				}
 			}
+
+			// 将局部状态写回 this，供下次 feed 调用继续使用
+			this.start = start;
+			this.nesting = nesting;
+			this.inString = inString;
+			this.escaped = escaped;
 
 			// 3. 清理已消费部分：用 _consumed 记录已消费位置而非每次都物理裁剪 buffer。
 			//    避免每个完整值都产生一次 String 分配（buffer.slice），
@@ -149,7 +162,7 @@ export function createJsonValueParser(onValue) {
 				// 当有未完成的部分值（start !== -1）时，readPos 跳到 buffer 末尾
 				// 避免下次 feed 重扫已计入 nesting 的 [/{ 字符，
 				// 同时保留 nested/inString/escaped 状态供继续解析。
-				this.readPos = this.start !== -1 ? this.buffer.length : this._consumed;
+				this.readPos = this.start !== -1 ? buffer.length : this._consumed;
 				if (this._consumed > 65536) {
 					if (this.start !== -1) this.start -= this._consumed;
 					this.buffer = this.buffer.slice(this._consumed);
@@ -158,7 +171,7 @@ export function createJsonValueParser(onValue) {
 				}
 			} else {
 				// 没有完整值被消费，记录当前位置，下次 feed 从此继续
-				this.readPos = this.buffer.length;
+				this.readPos = buffer.length;
 			}
 		},
 		reset() {
@@ -228,15 +241,24 @@ export function createRowStreamParser(onRow) {
 			// 如果数组已结束，直接返回新数据
 			if (this.finished) return chunk;
 
-			// 1. 追加新数据到 buffer
+			// 1. 追加新数据到 buffer；将状态缓存到局部变量避免隐藏类查找
 			this.buffer += chunk;
+
+			const buffer = this.buffer;
+			let started = this.started;
+			let inString = this.inString;
+			let escaped = this.escaped;
+			let elementStart = this.elementStart;
+			let elementEnd = this.elementEnd;
+			let nesting = this.nesting;
+			let consumed = this._consumed;
 			let index = this.readPos;
 
-			while (index < this.buffer.length) {
-				const code = this.buffer.charCodeAt(index);
+			while (index < buffer.length) {
+				const code = buffer.charCodeAt(index);
 
 				// === 阶段 1：等待数组开始 [ ===
-				if (!this.started) {
+				if (!started) {
 					if (isWhitespaceCode(code)) {
 						index++;
 						continue;
@@ -246,26 +268,26 @@ export function createRowStreamParser(onRow) {
 						index++;
 						continue;
 					}
-					this.started = true;
+					started = true;
 					index++;
 					continue;
 				}
 
 				// === 阶段 2：在字符串内部，处理转义 ===
-				if (this.inString) {
-					if (this.escaped) {
-						this.escaped = false;
+				if (inString) {
+					if (escaped) {
+						escaped = false;
 					} else if (code === CHAR_BACKSLASH) {
-						this.escaped = true;
+						escaped = true;
 					} else if (code === CHAR_QUOTE) {
-						this.inString = false;
+						inString = false;
 					}
 					index++;
 					continue;
 				}
 
 				// === 阶段 3：不在任何元素内，等待元素起始 ===
-				if (this.elementStart === -1) {
+				if (elementStart === -1) {
 					if (isWhitespaceCode(code) || code === CHAR_COMMA) {
 						// 跳过空白和元素间逗号
 						index++;
@@ -274,73 +296,80 @@ export function createRowStreamParser(onRow) {
 					if (code === CHAR_CLOSE_BRACKET) {
 						// 数组结束，标记 finished 并返回剩余数据
 						this.finished = true;
-						const leftover = this.buffer.slice(index + 1);
-						this.buffer = "";
 						this.readPos = 0;
-						return leftover;
+						this.buffer = "";
+						this.started = false;
+						return buffer.slice(index + 1);
 					}
 					// 记录元素起始位置，初始化嵌套计数
-					this.elementStart = index;
-					this.elementEnd = -1;
-					this.nesting = code === CHAR_OPEN_BRACE || code === CHAR_OPEN_BRACKET ? 1 : 0;
-					this.inString = code === CHAR_QUOTE;
+					elementStart = index;
+					elementEnd = -1;
+					nesting = code === CHAR_OPEN_BRACE || code === CHAR_OPEN_BRACKET ? 1 : 0;
+					inString = code === CHAR_QUOTE;
+					escaped = false;
 					index++;
 					continue;
 				}
 
 				// === 阶段 4：在元素内，处理字符串、嵌套结构 ===
 				if (code === CHAR_QUOTE) {
-					this.inString = true;
+					inString = true;
 					index++;
 					continue;
 				}
 
 				if (code === CHAR_OPEN_BRACE || code === CHAR_OPEN_BRACKET) {
-					this.nesting++;
+					nesting++;
 					index++;
 					continue;
 				}
 
 				if (code === CHAR_CLOSE_BRACE || code === CHAR_CLOSE_BRACKET) {
-					this.nesting--;
-					if (this.nesting === 0) {
+					nesting--;
+					if (nesting === 0) {
 						// 嵌套归零，标记元素结束位置
-						this.elementEnd = index + 1;
+						elementEnd = index + 1;
 					}
 				}
 
 				// === 阶段 5：确认元素后面是逗号或 ]，保证元素完整结束 ===
-				if (this.elementEnd !== -1) {
+				if (elementEnd !== -1) {
 					// 向前 look-ahead，跳过元素后的空白
 					let lookAhead = index + 1;
-					while (lookAhead < this.buffer.length && isWhitespaceCode(this.buffer.charCodeAt(lookAhead))) {
+					while (lookAhead < buffer.length && isWhitespaceCode(buffer.charCodeAt(lookAhead))) {
 						lookAhead++;
 					}
-					if (lookAhead < this.buffer.length) {
-						const delimiter = this.buffer.charCodeAt(lookAhead);
+					if (lookAhead < buffer.length) {
+						const delimiter = buffer.charCodeAt(lookAhead);
 						if (delimiter === CHAR_COMMA || delimiter === CHAR_CLOSE_BRACKET) {
 							// 元素完整：切片出元素文本并回调
-							onRow(this.buffer.slice(this.elementStart, this.elementEnd));
-							// 不直接物理裁剪 buffer，改用 _consumed 记录已消费位置
-							this._consumed = lookAhead + 1;
-							this.elementStart = -1;
-							this.elementEnd = -1;
-							this.nesting = 0;
+							onRow(buffer.slice(elementStart, elementEnd));
+							// 不直接物理裁剪 buffer，改用 consumed 记录已消费位置
+							consumed = lookAhead + 1;
+							elementStart = -1;
+							elementEnd = -1;
+							nesting = 0;
 							if (delimiter === CHAR_CLOSE_BRACKET) {
-								// 数组结束，从 _consumed 处切片剩余数据返回
+								// 数组结束，从 consumed 处切片剩余数据返回
 								this.finished = true;
-								const tail = this.buffer.slice(this._consumed);
 								this.buffer = "";
+								this.started = false;
+								this.inString = false;
+								this.escaped = false;
+								this.elementStart = -1;
+								this.elementEnd = -1;
+								this.nesting = 0;
 								this._consumed = 0;
 								this.readPos = 0;
-								return tail;
+								return buffer.slice(consumed);
 							}
-							index = this._consumed;
+							index = consumed;
 							// 累积消费超过 64KB 时一次物理裁剪，避免 buffer 膨胀和过多 String 分配
-							if (this._consumed > 65536) {
-								this.buffer = this.buffer.slice(this._consumed);
-								index = 0;
+							if (consumed > 65536) {
+								this.buffer = buffer.slice(consumed);
 								this._consumed = 0;
+								index = 0;
+								consumed = 0;
 							}
 							continue;
 						}
@@ -351,15 +380,24 @@ export function createRowStreamParser(onRow) {
 				index++;
 			}
 
+			// 将局部状态写回 this，供下次 feed 调用继续使用
+			this.started = started;
+			this.inString = inString;
+			this.escaped = escaped;
+			this.elementStart = elementStart;
+			this.elementEnd = elementEnd;
+			this.nesting = nesting;
+			this._consumed = consumed;
+
 			// 6. buffer 裁剪：用 _consumed 取代逐个元素的 buffer.slice，
 			//    每消费一个元素就 slice 一次在高吞吐下会大量分配临时 String。
 			//    改为累积消费偏移，仅在本轮末尾做一次物理裁剪。
-			if (this._consumed > 0) {
-				if (this.elementStart !== -1) {
-					this.elementStart -= this._consumed;
-					if (this.elementEnd !== -1) this.elementEnd -= this._consumed;
+			if (consumed > 0) {
+				if (elementStart !== -1) {
+					this.elementStart -= consumed;
+					if (elementEnd !== -1) this.elementEnd -= consumed;
 				}
-				this.buffer = this.buffer.slice(this._consumed);
+				this.buffer = buffer.slice(consumed);
 				this._consumed = 0;
 			}
 			// 保留原始逻辑：若 elementStart > 0 则将未完成元素对齐到 buffer 头部
