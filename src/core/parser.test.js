@@ -377,4 +377,45 @@ describe("createRowStreamParser", () => {
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0], '{"id":1}');
 	});
+
+	test("fuzz：createJsonValueParser 随机数据不崩溃", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+		for (let i = 0; i < 500; i++) {
+			const len = Math.floor(Math.random() * 200);
+			let s = "";
+			for (let j = 0; j < len; j++) {
+				s += String.fromCharCode(Math.floor(Math.random() * 256));
+			}
+			parser.feed(s);
+			parser.reset();
+		}
+	});
+
+	test("fuzz：createRowStreamParser 随机数据不崩溃", () => {
+		const rows = [];
+		const parser = createRowStreamParser((raw) => rows.push(raw));
+		for (let i = 0; i < 500; i++) {
+			const len = Math.floor(Math.random() * 200);
+			let s = "";
+			for (let j = 0; j < len; j++) {
+				s += String.fromCharCode(Math.floor(Math.random() * 256));
+			}
+			parser.feed(s);
+			parser.reset();
+		}
+	});
+
+	test("fuzz：深层嵌套不导致崩溃或无限循环", () => {
+		const parser = createJsonValueParser(() => {});
+		const deep = "[" + "[".repeat(5000) + "]".repeat(5000) + "]";
+		parser.feed(deep);
+	});
+
+	test("fuzz：深层嵌套行流解析器不崩溃", () => {
+		const parser = createRowStreamParser(() => {});
+		const deep = "[" + "[".repeat(5000) + "]".repeat(5000) + "]";
+		const leftover = parser.feed(deep);
+		assert.ok(typeof leftover === "string");
+	});
 });

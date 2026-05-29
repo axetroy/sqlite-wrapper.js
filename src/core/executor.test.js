@@ -436,6 +436,84 @@ describe("SQLiteExecutor", () => {
 		});
 	});
 
+	describe("随机测试", () => {
+		test("随机数据 round-trip：插入并读回各种类型的值", async () => {
+			await sqlite.execute("CREATE TABLE IF NOT EXISTS random_roundtrip (id INTEGER PRIMARY KEY, txt TEXT, num REAL, bl BOOLEAN)");
+
+			const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-!@#$%^&*()\"'\\n\\t你好世界";
+			function randomString(len) {
+				let s = "";
+				for (let i = 0; i < len; i++) {
+					s += chars[Math.floor(Math.random() * chars.length)];
+				}
+				return s;
+			}
+
+			const rows = [];
+			const N = 50;
+			for (let i = 0; i < N; i++) {
+				rows.push({
+					id: i,
+					txt: randomString(Math.floor(Math.random() * 30) + 1),
+					num: Math.random() * 10000,
+					bl: Math.random() > 0.5 ? 1 : 0,
+				});
+			}
+
+			await Promise.all(
+				rows.map((r) =>
+					sqlite.execute("INSERT INTO random_roundtrip (id, txt, num, bl) VALUES (?, ?, ?, ?)", [r.id, r.txt, r.num, r.bl]),
+				),
+			);
+
+			const result = await sqlite.query("SELECT id, txt, num, bl FROM random_roundtrip ORDER BY id ASC");
+			assert.equal(result.length, N, "全部行应写入");
+
+			for (const original of rows) {
+				const actual = result.find((r) => r.id === original.id);
+				assert.ok(actual, `id=${original.id} 应存在`);
+				assert.equal(actual.txt, original.txt, `id=${original.id} txt 不匹配`);
+				assert.ok(Math.abs(actual.num - original.num) < 1e-9, `id=${original.id} num 不匹配`);
+				assert.equal(actual.bl, original.bl, `id=${original.id} bl 不匹配`);
+			}
+		});
+
+		test("随机并发：混合合法与非法 SQL 不互相干扰", async () => {
+			await sqlite.execute("CREATE TABLE IF NOT EXISTS random_concurrent (id INTEGER PRIMARY KEY, val TEXT)");
+			await sqlite.execute("INSERT INTO random_concurrent (id, val) VALUES (1, 'init')");
+
+			const ops = [];
+			const opCount = 100;
+
+			for (let i = 0; i < opCount; i++) {
+				const roll = Math.random();
+				if (roll < 0.3) {
+					ops.push(sqlite.query("SELECT id, val FROM random_concurrent WHERE id = 1"));
+				} else if (roll < 0.5) {
+					ops.push(sqlite.execute("INSERT INTO random_concurrent (id, val) VALUES (?, ?)", [i + 100, `v${i}`]));
+				} else if (roll < 0.7) {
+					ops.push(sqlite.query("SELECT COUNT(*) AS cnt FROM random_concurrent"));
+				} else if (roll < 0.85) {
+					ops.push(assert.rejects(sqlite.query("SELECT * FROM nonexistent_random_table")));
+				} else {
+					ops.push(assert.rejects(sqlite.query("SELECT FORM random_concurrent")));
+				}
+			}
+
+			const results = await Promise.allSettled(ops);
+
+			const rejected = results.filter((r) => r.status === "rejected");
+			const fulfilled = results.filter((r) => r.status === "fulfilled");
+
+			assert.ok(fulfilled.length >= 1, "至少一条合法 SQL 成功");
+			assert.ok(rejected.length >= 1, "至少一条非法 SQL 被拒绝");
+
+			// 验证数据完整性
+			const final = await sqlite.query("SELECT id, val FROM random_concurrent WHERE id = 1");
+			assert.deepEqual(final, [{ id: 1, val: "init" }], "初始数据未被破坏");
+		});
+	});
+
 	describe("读写分离", () => {
 		test("文件 DB 创建 reader pool", () => {
 			const dbFile = path.join(os.tmpdir(), `rw-pool-${Date.now()}.db`);

@@ -1078,4 +1078,69 @@ describe("PipelineEngine", () => {
 			assert.equal(engine.pendingStatements, 0, "两个任务都完成后应归零");
 		});
 	});
+
+	// ── Fuzzy 测试 ──────────────────────────────────
+
+	describe("fuzzy", () => {
+		test("fuzz：随机 stdout chunk 不导致崩溃", async () => {
+			const { task } = createTask({ token: "fuzz-stdout" });
+			engine.enqueue(task);
+
+			for (let i = 0; i < 300; i++) {
+				const len = Math.floor(Math.random() * 100);
+				let s = "";
+				for (let j = 0; j < len; j++) {
+					s += String.fromCharCode(Math.floor(Math.random() * 256));
+				}
+				engine.handleStdoutChunk(s);
+			}
+
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"fuzz-stdout"}]`);
+			await flush();
+			disarm(task);
+			assert.equal(task.settled, true, "任务应被结算");
+		});
+
+		test("fuzz：随机 stderr chunk 不导致崩溃", async () => {
+			const { task } = createTask({ token: "fuzz-stderr" });
+			engine.enqueue(task);
+
+			for (let i = 0; i < 300; i++) {
+				const len = Math.floor(Math.random() * 80);
+				let s = "";
+				for (let j = 0; j < len; j++) {
+					s += String.fromCharCode(Math.floor(Math.random() * 256));
+				}
+				engine.handleStderrChunk(s);
+			}
+
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"fuzz-stderr"}]`);
+			await flush();
+			disarm(task);
+			assert.equal(task.settled, true);
+		});
+
+		test("fuzz：交错随机 stderr + stdout 不导致崩溃", async () => {
+			const { task } = createTask({ token: "fuzz-mixed" });
+			engine.enqueue(task);
+
+			for (let i = 0; i < 200; i++) {
+				const len = Math.floor(Math.random() * 60);
+				let s = "";
+				for (let j = 0; j < len; j++) {
+					s += String.fromCharCode(Math.floor(Math.random() * 256));
+				}
+				if (Math.random() < 0.5) {
+					engine.handleStdoutChunk(s);
+				} else {
+					engine.handleStderrChunk(s);
+				}
+			}
+
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"fuzz-mixed"}]`);
+			await flush();
+			disarm(task);
+			assert.equal(task.settled, true);
+		});
+	});
 });
