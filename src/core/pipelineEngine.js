@@ -178,7 +178,7 @@ export class PipelineEngine {
 		if (!task) return;
 
 		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
-		if (isSentinelRaw(raw, task.token)) {
+		if (isSentinelRaw(raw, task.sentinelStr)) {
 			this.#inflightTasks.shift();
 
 			if (task.timedout) {

@@ -1,7 +1,7 @@
 import { ProcessManager } from "./process.js";
 import { Queue } from "./queue.js";
 import { createJsonValueParser, toError } from "./parser.js";
-import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
+import { isSentinelRaw, isSentinelRow, buildBatchPayload, buildSentinelStr } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { finalizePendingTasks, prepareTaskTimeout } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
@@ -86,6 +86,7 @@ export class TaskWorker {
 			errorScheduled: false,
 			timer: null,
 			startTime: 0,
+			sentinelStr: buildSentinelStr(config.token),
 		};
 		this.#metrics?.incrementTasksTotal(config.kind);
 		this.#pendingQueue.enqueue(task);
@@ -171,7 +172,7 @@ export class TaskWorker {
 		if (!task) return;
 
 		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
-		if (isSentinelRaw(raw, task.token)) {
+		if (isSentinelRaw(raw, task.sentinelStr)) {
 			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 

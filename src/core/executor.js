@@ -9,6 +9,7 @@ import { setupStreamParser, AsyncRowBuffer } from "../stream/stream.js";
 import { interpolateSQL } from "../utils/interpolate.js";
 import { normalizeSQL } from "../utils/normalize.js";
 import { classifySQL } from "./classifier.js";
+import { buildSentinelStr } from "./protocol.js";
 import { ReaderPool } from "./readerPool.js";
 import { Metrics } from "./metrics.js";
 import { TransactionScope } from "./transactionScope.js";
@@ -328,6 +329,7 @@ export class SQLiteExecutor {
 				startTime: 0,
 				rowParser: null,
 				rows: kind === "query" ? [] : null,
+				sentinelStr: buildSentinelStr(token),
 			};
 
 			if (kind === "stream") {

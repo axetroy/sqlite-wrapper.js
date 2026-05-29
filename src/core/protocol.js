@@ -89,8 +89,18 @@ export function buildBatchPayload(batch) {
  */
 const TC_FIRST_CHAR = TOKEN_COLUMN.charCodeAt(0);
 
-export function isSentinelRaw(raw, token) {
-	return raw.charCodeAt(3) === TC_FIRST_CHAR && raw === `[{"${TOKEN_COLUMN}":"${token}"}]`;
+/**
+ * 构建 sentinel 字符串，供 isSentinelRaw 直接比较。
+ * 每任务调用一次（而非每 JSON 值），消除模板字符串重复分配。
+ * @param {string} token
+ * @returns {string}
+ */
+export function buildSentinelStr(token) {
+	return `[{"${TOKEN_COLUMN}":"${token}"}]`;
+}
+
+export function isSentinelRaw(raw, sentinelStr) {
+	return raw.charCodeAt(3) === TC_FIRST_CHAR && raw === sentinelStr;
 }
 
 /**
