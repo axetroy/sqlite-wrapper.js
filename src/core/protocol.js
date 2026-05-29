@@ -55,9 +55,7 @@ function isTransactionControl(sql) {
  * @returns {string}
  */
 export function buildBatchPayload(batch) {
-	const useWalBatch =
-		batch.length > 1 &&
-		batch.every(t => t.kind === "execute" && !isTransactionControl(t.sql));
+	const useWalBatch = batch.length > 1 && batch.every((t) => t.kind === "execute" && !isTransactionControl(t.sql));
 	if (useWalBatch) {
 		const parts = ["BEGIN;\n"];
 		for (const task of batch) {
@@ -85,7 +83,7 @@ const TC_FIRST_CHAR = TOKEN_COLUMN.charCodeAt(0);
  * @param {string} token
  * @returns {string}
  */
-export function buildSentinelStr(token) {
+function buildSentinelStr(token) {
 	return `[{"${TOKEN_COLUMN}":"${token}"}]`;
 }
 
