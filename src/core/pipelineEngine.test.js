@@ -203,15 +203,11 @@ describe("PipelineEngine", () => {
 			assert.ok(mockPM._writes[0].includes("CREATE TABLE t"));
 		});
 
-		test("每个任务都设置了 startTime 和定时器", () => {
+		test("每个任务都设置了 startTime", () => {
 			const before = performance.now();
 			const { task } = createTask();
 			engine.enqueue(task);
 			assert.ok(task.startTime >= before, "startTime 应在 enqueue 之后");
-			assert.ok(task.timer !== null, "应设置超时定时器");
-			assert.ok(typeof task.timer === "object", "定时器应为 Timeout 对象");
-			clearTimeout(task.timer);
-			task.timer = null;
 		});
 	});
 
@@ -643,6 +639,7 @@ describe("PipelineEngine", () => {
 				metrics,
 				statementTimeout: 5000,
 				onTaskTimeout: (task) => { timeouts.push(task); },
+				sweepInterval: 5,
 			});
 			localEngine.activate();
 
@@ -689,10 +686,85 @@ describe("PipelineEngine", () => {
 			localEngine.kill();
 		});
 
+		test("sweep 空闲时无定时器，有任务时创建，完成后自动停止", async () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+				sweepInterval: 5,
+			});
+			localEngine.activate();
+
+			// 无任务 → 无定时器
+			assert.equal(localEngine._sweepTimer, null, "空闲时无定时器");
+
+			// 发送任务 → 定时器创建
+			const { task, promise } = createTask({ token: "auto-stop" });
+			localEngine.enqueue(task);
+			assert.ok(localEngine._sweepTimer !== null, "有任务时有定时器");
+
+			// 完成所有任务 → 定时器自动停止
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"auto-stop"}]`);
+			await flush();
+			// 等一帧让 sweep 回调有机会执行（如果仍有定时器则不应再次调度）
+			await new Promise((r) => setTimeout(r, 20));
+			assert.equal(localEngine._sweepTimer, null, "任务完成后定时器自动停止");
+
+			// 发送新任务 → 定时器重新创建
+			const { task: t2 } = createTask({ token: "auto-stop-2" });
+			localEngine.enqueue(t2);
+			assert.ok(localEngine._sweepTimer !== null, "新任务到达重新创建定时器");
+
+			await promise.catch(() => {});
+			localEngine.kill();
+		});
+
+		test("sweep 正确检测超时（不依赖每个任务的定时器）", async () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+				sweepInterval: 5,
+			});
+			localEngine.activate();
+
+			const { task: t1, promise: p1 } = createTask({
+				token: "sw-t1",
+				timeout: 1,
+			});
+			const { task: t2, promise: p2 } = createTask({
+				token: "sw-t2",
+			});
+
+			localEngine.enqueue(t1);
+			localEngine.enqueue(t2);
+
+			// 确认没有每个任务的定时器（timer 应为 null）
+			assert.equal(t1.timer, null, "不应设置每个任务的定时器");
+			assert.equal(t2.timer, null, "不应设置每个任务的定时器");
+
+			// 等待 sweep 检测到 t1 超时
+			await new Promise((r) => setTimeout(r, 30));
+
+			// t1 超时后被 settle（reject），但仍留在 inflight 等待 sentinel
+			assert.equal(localEngine.pendingStatements, 2, "t1 超时后仍在 inflight(等 sentinel)");
+
+			// t1 的 sentinel 到达
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"sw-t1"}]`);
+			// t2 的 sentinel 到达
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"sw-t2"}]`);
+			await flush();
+
+			await assert.rejects(p1, /timed out/, "t1 应因超时被拒绝");
+			const r2 = await p2;
+			assert.deepEqual(r2, [], "t2 应正常完成");
+
+			localEngine.kill();
+		});
+
 		test("超时任务数据行不会污染后续任务", async () => {
 			const localEngine = new PipelineEngine(mockPM, {
 				metrics,
 				statementTimeout: 5000,
+				sweepInterval: 5,
 			});
 			localEngine.activate();
 
@@ -804,6 +876,39 @@ describe("PipelineEngine", () => {
 			const { task } = createTask();
 			engine.enqueue(task);
 			assert.equal(mockPM._writes.length, 0);
+		});
+
+		test("kill 清除扫制定时器（空闲时不创建定时器）", () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+				sweepInterval: 100,
+			});
+			localEngine.activate();
+			// 没有任务时不应有定时器
+			assert.equal(localEngine._sweepTimer, null, "空闲时无扫制定时器");
+
+			// 发送任务后定时器被创建
+			const { task } = createTask();
+			localEngine.enqueue(task);
+			assert.ok(localEngine._sweepTimer !== null, "有任务时应创建扫制定时器");
+
+			localEngine.kill();
+			assert.equal(localEngine._sweepTimer, null, "kill 后扫制定时器应被清空");
+		});
+
+		test("扫制定时器已 unref，不阻止进程退出", () => {
+			const localEngine = new PipelineEngine(mockPM, {
+				metrics,
+				statementTimeout: 5000,
+				sweepInterval: 100,
+			});
+			localEngine.activate();
+			const { task } = createTask();
+			localEngine.enqueue(task);
+			assert.ok(localEngine._sweepTimer, "有任务时应创建扫制定时器");
+			assert.equal(localEngine._sweepTimer.hasRef?.(), false, "定时器应已 unref");
+			localEngine.kill();
 		});
 	});
 

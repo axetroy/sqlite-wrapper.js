@@ -16,6 +16,8 @@ export interface PipelineEngineOptions {
 	maxInflight?: number;
 	/** 任务超时时的回调 */
 	onTaskTimeout?: (task: any) => void;
+	/** 任务超时检查的时间间隔，默认 100ms */
+	sweepInterval?: number;
 }
 
 /**

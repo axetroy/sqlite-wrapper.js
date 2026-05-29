@@ -28,6 +28,8 @@ export class PipelineEngine {
 	#maxInflight;
 	#onTaskTimeout;
 	#active = false;
+	#sweepTimer = null;
+	#sweepIntervalMs;
 
 	/**
 	 * @param {import("./process.js").ProcessManager} processManager
@@ -39,7 +41,7 @@ export class PipelineEngine {
 	 *   onTaskTimeout?: (task: object) => void,
 	 * }} options
 	 */
-	constructor(processManager, { metrics, statementTimeout, logger, batchSize = DEFAULT_BATCH_SIZE, maxInflight = DEFAULT_MAX_INFLIGHT, onTaskTimeout }) {
+	constructor(processManager, { metrics, statementTimeout, logger, batchSize = DEFAULT_BATCH_SIZE, maxInflight = DEFAULT_MAX_INFLIGHT, onTaskTimeout, sweepInterval = 100 }) {
 		this.#processManager = processManager;
 		this.#metrics = metrics;
 		this.#statementTimeout = statementTimeout;
@@ -49,6 +51,12 @@ export class PipelineEngine {
 		this.#onTaskTimeout = onTaskTimeout ?? (() => {});
 		this.#sharedValueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
 		this.#processManager.setOnDrainCallback(() => this.#pumpQueue());
+		this.#sweepIntervalMs = sweepInterval;
+	}
+
+	/** 测试用：获取扫制定时器引用。 */
+	get _sweepTimer() {
+		return this.#sweepTimer;
 	}
 
 	/** 主任务队列（供事务延迟任务恢复使用）。 */
@@ -125,9 +133,9 @@ export class PipelineEngine {
 
 		for (const task of batch) {
 			task.startTime = now;
-			task.timer = setTimeout(() => this.#handleTaskTimeout(task), task.timeout);
 		}
 		this.#inflightTasks.push(...batch);
+		this.#scheduleSweep();
 		this.#processManager.write(payload);
 	}
 
@@ -161,7 +169,6 @@ export class PipelineEngine {
 
 		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
 		if (isSentinelRaw(raw, task.token)) {
-			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
 			if (task.timedout) {
@@ -197,7 +204,6 @@ export class PipelineEngine {
 		}
 
 		if (isSentinelRow(parsed, task.token)) {
-			clearTimeout(task.timer);
 			this.#inflightTasks.shift();
 
 			if (task.timedout) {
@@ -260,6 +266,24 @@ export class PipelineEngine {
 		});
 	}
 
+	#scheduleSweep() {
+		if (this.#sweepTimer) return;
+		this.#sweepTimer = setTimeout(() => {
+			this.#sweepTimer = null;
+			const inflight = this.#inflightTasks;
+			const now = performance.now();
+			for (let i = 0; i < inflight.length; i++) {
+				const task = inflight[i];
+				if (now - task.startTime > task.timeout) {
+					this.#handleTaskTimeout(task);
+				}
+			}
+			if (this.#inflightTasks.length > 0) {
+				this.#scheduleSweep();
+			}
+		}, this.#sweepIntervalMs).unref();
+	}
+
 	#handleTaskTimeout(task) {
 		const error = prepareTaskTimeout(task, this.#metrics);
 		if (error) {
@@ -303,6 +327,8 @@ export class PipelineEngine {
 	 */
 	kill() {
 		this.#active = false;
+		clearTimeout(this.#sweepTimer);
+		this.#sweepTimer = null;
 		this.rejectAll(new Error("PipelineEngine is killed"));
 	}
 }
