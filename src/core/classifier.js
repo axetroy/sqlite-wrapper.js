@@ -30,7 +30,8 @@ export function classifySQL(sql) {
 	if (trimmed.length === 0) return "write";
 	let result;
 	if (trimmed.includes(";")) {
-		const stmts = trimmed.split(";");
+		const stmts = trimmed.split(";").filter((s) => s.trim().length > 0);
+		if (stmts.length === 0) return "write";
 		result = "read";
 		for (const stmt of stmts) {
 			if (classifySingle(stmt) === "write") {
