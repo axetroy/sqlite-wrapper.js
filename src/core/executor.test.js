@@ -596,6 +596,89 @@ describe("SQLiteExecutor", () => {
 			assert.deepEqual(rows, [{ val: 1 }]);
 		});
 
+		test("语法错误的消息可从 stderr 正确提取，不丢失细节", async () => {
+			try {
+				await sqlite.query("SELECT FORM users");
+				assert.fail("应抛出异常");
+			} catch (err) {
+				assert.ok(err instanceof Error);
+				assert.ok(err.message.includes("syntax error") || err.message.includes("near"), `语法错误消息应包含 "syntax error" 或 "near"，实际: ${err.message}`);
+			}
+
+			const rows = await sqlite.query("SELECT 1 AS val");
+			assert.deepEqual(rows, [{ val: 1 }]);
+		});
+
+		test("execute 语法错误不影响后续 execute", async () => {
+			await sqlite.execute("CREATE TABLE IF NOT EXISTS syn_err (id INTEGER PRIMARY KEY, name TEXT)");
+
+			await assert.rejects(
+				sqlite.execute("INSART INTO syn_err (name) VALUES (?)", ["x"]),
+				/error|Error/i,
+			);
+
+			await sqlite.execute("INSERT INTO syn_err (name) VALUES (?)", ["Alice"]);
+			const rows = await sqlite.query("SELECT * FROM syn_err ORDER BY id ASC");
+			assert.deepEqual(rows, [{ id: 1, name: "Alice" }]);
+		});
+
+		test("查询不存在的表时错误消息可读", async () => {
+			try {
+				await sqlite.query("SELECT * FROM nonexistent_test_table");
+				assert.fail("应抛出异常");
+			} catch (err) {
+				assert.ok(err instanceof Error);
+				assert.ok(
+					err.message.includes("no such table"),
+					`错误消息应包含 "no such table"，实际: ${err.message}`,
+				);
+			}
+
+			await sqlite.execute("CREATE TABLE IF NOT EXISTS existent_table (id INTEGER PRIMARY KEY)");
+			await sqlite.execute("INSERT INTO existent_table VALUES (42)");
+			const rows = await sqlite.query("SELECT * FROM existent_table ORDER BY id ASC");
+			assert.deepEqual(rows, [{ id: 42 }]);
+		});
+
+		test("查询不存在的列时错误消息可读", async () => {
+			await sqlite.execute("CREATE TABLE IF NOT EXISTS col_test (id INTEGER PRIMARY KEY, name TEXT)");
+			await sqlite.execute("INSERT INTO col_test (name) VALUES ('hello')");
+
+			try {
+				await sqlite.query("SELECT nonexistent_col FROM col_test WHERE id = 1");
+				assert.fail("应抛出异常");
+			} catch (err) {
+				assert.ok(err instanceof Error);
+				assert.ok(
+					err.message.includes("no such column"),
+					`错误消息应包含 "no such column"，实际: ${err.message}`,
+				);
+			}
+
+			const rows = await sqlite.query("SELECT name FROM col_test ORDER BY id ASC");
+			assert.deepEqual(rows, [{ name: "hello" }]);
+		});
+
+		test("stream 语法错误时错误消息可读", async () => {
+			let errMsg;
+			try {
+				for await (const _ of sqlite.stream("SELECT FORM users WHERE 1 = 1")) {
+					// noop
+				}
+				assert.fail("应抛出异常");
+			} catch (err) {
+				errMsg = err.message;
+				assert.ok(err instanceof Error);
+				assert.ok(
+					errMsg.includes("syntax error") || errMsg.includes("near"),
+					`stream 语法错误消息应包含 "syntax error" 或 "near"，实际: ${errMsg}`,
+				);
+			}
+
+			const rows = await sqlite.query("SELECT 1 AS val");
+			assert.deepEqual(rows, [{ val: 1 }]);
+		});
+
 		test("并发查询中一条 SQL 出错不影响其余正确查询", async () => {
 			const results = await Promise.allSettled([
 				sqlite.query("SELECT 100 AS v"),
