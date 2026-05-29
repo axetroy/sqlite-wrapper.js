@@ -69,23 +69,83 @@ describe("ReaderPool", () => {
 			);
 		});
 
-		test("round-robin 分发任务", async () => {
-			const results = [];
+		test("least-busy 分发任务: 同步负载均衡", () => {
+			// 同步入队 4 个任务，验证 least-busy 策略将任务均匀分到 2 个 worker
+			// 预期: task1→w0, task2→w1, task3→w0, task4→w1 → 各 2 个
+			const promises = [];
 			for (let i = 0; i < 4; i++) {
-				const rows = await new Promise((resolve, reject) => {
+				promises.push(new Promise((resolve, reject) => {
 					pool.enqueue({
 						kind: "query",
 						sql: `SELECT ${i} AS v`,
 						timeout: 10000,
-						token: `rr-tok-${i}`,
+						token: `lb-tok-${i}`,
 						onRow: null,
 						resolve,
 						reject,
 					});
-				});
-				results.push(rows[0].v);
+				}));
 			}
-			assert.deepEqual(results, [0, 1, 2, 3]);
+			assert.equal(pool._workers[0].pendingStatements, 2);
+			assert.equal(pool._workers[1].pendingStatements, 2);
+			return Promise.all(promises);
+		});
+
+		test("least-busy 优先选择负载低的 worker", () => {
+			const noop = () => {};
+			// 先入队 1 个任务 → w0（负载相同，rrIndex=0 选 w0）
+			pool.enqueue({
+				kind: "query",
+				sql: "SELECT 1",
+				timeout: 10000,
+				token: "lb-priority-1",
+				onRow: null,
+				resolve: noop,
+				reject: noop,
+			});
+			// w0 负载 1，w1 负载 0
+			assert.equal(pool._workers[0].pendingStatements, 1);
+			assert.equal(pool._workers[1].pendingStatements, 0);
+
+			// 再入队 → w0 负载 1，w1 负载 0，应选 w1
+			pool.enqueue({
+				kind: "query",
+				sql: "SELECT 2",
+				timeout: 10000,
+				token: "lb-priority-2",
+				onRow: null,
+				resolve: noop,
+				reject: noop,
+			});
+			assert.equal(pool._workers[0].pendingStatements, 1);
+			assert.equal(pool._workers[1].pendingStatements, 1);
+		});
+
+		test("least-busy 多个候选负载相同时 round-robin 选", () => {
+			const noop = () => {};
+			// 入队 2 个任务使各 worker 负载均为 1
+			pool.enqueue({
+				kind: "query",
+				sql: "SELECT 1", timeout: 10000, token: "lb-multi-1",
+				onRow: null, resolve: noop, reject: noop,
+			});
+			pool.enqueue({
+				kind: "query",
+				sql: "SELECT 2", timeout: 10000, token: "lb-multi-2",
+				onRow: null, resolve: noop, reject: noop,
+			});
+			// 各 worker 负载均为 1
+			assert.equal(pool._workers[0].pendingStatements, 1);
+			assert.equal(pool._workers[1].pendingStatements, 1);
+
+			// 第 3 个任务: 负载相同（各 1），rrIndex 在上一次入队后为 2 → candidates[2%2]=0 → 选 w0
+			pool.enqueue({
+				kind: "query",
+				sql: "SELECT 3", timeout: 10000, token: "lb-multi-3",
+				onRow: null, resolve: noop, reject: noop,
+			});
+			assert.equal(pool._workers[0].pendingStatements, 2);
+			assert.equal(pool._workers[1].pendingStatements, 1);
 		});
 
 		test("并发执行多个查询", async () => {
