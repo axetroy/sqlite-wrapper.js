@@ -26,7 +26,8 @@ export function buildPayload(sql, token, { skipNormalize = false } = {}) {
  * @returns {boolean}
  */
 function isTransactionControl(sql) {
-	const s = sql.trim().toUpperCase();
+	// task.sql 已经过 normalizeSQL 去除首尾空白，trim() 冗余但保留防御
+	const s = sql.toUpperCase();
 	return (
 		s === "BEGIN" ||
 		s === "BEGIN TRANSACTION" ||

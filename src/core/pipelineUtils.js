@@ -42,8 +42,6 @@ export function finalizePendingTasks(tasks, settle, pumpQueue) {
 export function prepareTaskTimeout(task, metrics) {
 	if (task.settled) return null;
 	task.timedout = true;
-	clearTimeout(task.timer);
-	task.timer = null;
 	metrics?.incrementTasksTimeout();
 	return createTimeoutError(task.timeout, task.sql);
 }

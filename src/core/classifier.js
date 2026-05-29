@@ -20,13 +20,14 @@ function classifySingle(stmt) {
  * @returns {"read" | "write"}
  */
 export function classifySQL(sql) {
-	if (typeof sql !== "string" || sql.trim().length === 0) return "write";
+	if (typeof sql !== "string") return "write";
 
-	// Cache lookup: keyed by original SQL (template), not interpolated.
 	const cached = _classifyCache.get(sql);
 	if (cached !== undefined) return cached;
 
+	// sql 已经过 normalizeSQL 去除首尾空白，但保留 trim() 防御直接调用
 	const trimmed = sql.trim();
+	if (trimmed.length === 0) return "write";
 	let result;
 	if (trimmed.includes(";")) {
 		const stmts = trimmed.split(";");

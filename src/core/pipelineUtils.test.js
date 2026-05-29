@@ -96,21 +96,19 @@ describe("prepareTaskTimeout", () => {
 		return {
 			settled: false,
 			timedout: false,
-			timer: setTimeout(() => {}, 100000).unref(),
+			timer: null,
 			timeout: 100,
 			sql: "SELECT 1",
 			...overrides,
 		};
 	}
 
-	test("返回 TimeoutError，标记 timedout，清除定时器", () => {
-		const timer = setTimeout(() => {}, 100000).unref();
-		const task = makeTask({ timer });
+	test("返回 TimeoutError，标记 timedout", () => {
+		const task = makeTask();
 		const error = prepareTaskTimeout(task, null);
 		assert.ok(error instanceof Error);
 		assert.ok(error.message.includes("timed out"));
 		assert.equal(task.timedout, true);
-		assert.equal(task.timer, null, "timer 应被置 null");
 	});
 
 	test("指标递增", () => {

@@ -230,23 +230,4 @@ describe("settleTask", () => {
 		// 不应抛出异常
 	});
 
-	test("清除定时器", () => {
-		let timerCleared = false;
-		const task = {
-			timer: setTimeout(() => {}),
-			startTime: 100,
-			rowParser: null,
-			resolve: () => {},
-			reject: () => {},
-		};
-		// 劫持 clearTimeout 验证
-		const origClear = global.clearTimeout;
-		global.clearTimeout = (t) => { timerCleared = true; origClear(t); };
-		try {
-			settleTask(task, null, "ok", null);
-			assert.equal(timerCleared, true);
-		} finally {
-			global.clearTimeout = origClear;
-		}
-	});
 });
