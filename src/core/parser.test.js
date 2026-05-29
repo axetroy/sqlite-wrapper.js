@@ -29,9 +29,9 @@ describe("createJsonValueParser", () => {
 	test("解析 JSON 数组", () => {
 		const values = [];
 		const parser = createJsonValueParser((raw) => values.push(raw));
-		parser.feed('[1,2,3]');
+		parser.feed("[1,2,3]");
 		assert.equal(values.length, 1);
-		assert.equal(values[0], '[1,2,3]');
+		assert.equal(values[0], "[1,2,3]");
 	});
 
 	test("嵌套对象正确处理", () => {
@@ -63,7 +63,7 @@ describe("createJsonValueParser", () => {
 		const parser = createJsonValueParser((raw) => values.push(raw));
 		parser.feed('{"a"');
 		assert.equal(values.length, 0, "首次分块不应产生完整值");
-		parser.feed(':1}');
+		parser.feed(":1}");
 		assert.equal(values.length, 1);
 		assert.equal(values[0], '{"a":1}');
 	});
@@ -73,7 +73,7 @@ describe("createJsonValueParser", () => {
 		const parser = createJsonValueParser((raw) => values.push(raw));
 		parser.feed('{"a"');
 		parser.feed(':1,"b"');
-		parser.feed(':2}');
+		parser.feed(":2}");
 		assert.equal(values.length, 1);
 		assert.equal(values[0], '{"a":1,"b":2}');
 	});
@@ -112,6 +112,69 @@ describe("createJsonValueParser", () => {
 		assert.equal(values.length, 1);
 		assert.equal(values[0], "[1,2,3]");
 	});
+
+	test("物理裁剪 64KB 后 start 偏移正确，不完整值可继续解析", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+
+		// 构建一个略超过 64KB 的完整 JSON 数组
+		// 每个元素约 10 字节，8000 个元素约 80000 字节
+		const largeArray = "[" + Array.from({ length: 8000 }, (_, i) => JSON.stringify({ a: i })).join(",") + "]";
+		assert.ok(largeArray.length > 65536, `大数组长度 ${largeArray.length} 应超过 64KB`);
+
+		// 一次喂入大数组 + 不完整的新值（[ 开始）
+		parser.feed(largeArray + '[{"partial');
+
+		// 大数组应该被解析出一个完整值
+		assert.equal(values.length, 1, "大数组应被解析");
+		assert.equal(values[0], largeArray, "大数组原文应匹配");
+
+		// 不完整的值应在 parser.start 中记录，物理裁剪后 start 应指向新 buffer 头
+		assert.equal(parser.start, 0, "物理裁剪后 start 应为 0（新 buffer 起始）");
+
+		// 喂入剩余数据，应解析出第二个完整值
+		parser.feed('":1}]');
+		assert.equal(values.length, 2, "不完整值应在补充后解析");
+		assert.deepEqual(JSON.parse(values[1]), [{ partial: 1 }], "第二个值内容正确");
+	});
+
+	test("完整值后接不完整值，不分块补全（不触发物理裁剪）", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+
+		// 第一个 feed：完整值 + 不完整的第二个值
+		// {"a":1} 完整；{"b 引号未闭合（字符串跨 chunk）
+		parser.feed('{"a":1}{"b');
+		assert.equal(values.length, 1, "第一个完整值应被解析");
+		assert.equal(values[0], '{"a":1}', "第一个值原文正确");
+
+		// start 应指向不完整值的 {；nesting=1（仅计入 {）
+		assert.ok(parser.start > 0, "start 应指向不完整值");
+		assert.equal(parser.nesting, 1, 'nesting=1（仅 {，"b 仍在字符串中）');
+
+		// 第二个 feed：补全不完整值（不触发物理裁剪，验证重扫问题已修复）
+		parser.feed('":2}');
+		assert.equal(values.length, 2, "不完整值应在补充后解析");
+		assert.equal(values[1], '{"b":2}', "第二个值原文正确");
+	});
+
+	test("完整值后接不完整值，跨多 chunk 补全", () => {
+		const values = [];
+		const parser = createJsonValueParser((raw) => values.push(raw));
+
+		// chunk 1: 完整值 + 不完整值开头
+		parser.feed('[1]{"a');
+		assert.equal(values.length, 1, "第一个值应被解析");
+
+		// chunk 2: 继续补充
+		parser.feed('":');
+		assert.equal(values.length, 1, "仍未完整");
+
+		// chunk 3: 完成
+		parser.feed('"ok"}');
+		assert.equal(values.length, 2, "第二个值应完成");
+		assert.equal(values[1], '{"a":"ok"}', "第二个值原文正确");
+	});
 });
 
 describe("createRowStreamParser", () => {
@@ -140,7 +203,7 @@ describe("createRowStreamParser", () => {
 		parser.feed(':1},{"id"');
 		assert.equal(rows.length, 1, "第二个分块完成后第一个元素应被解析");
 		assert.equal(rows[0], '{"id":1}');
-		parser.feed(':2}]');
+		parser.feed(":2}]");
 		assert.equal(rows.length, 2);
 		assert.equal(rows[1], '{"id":2}');
 	});
@@ -148,7 +211,7 @@ describe("createRowStreamParser", () => {
 	test("空数组触发 finished", () => {
 		const rows = [];
 		const parser = createRowStreamParser((raw) => rows.push(raw));
-		const leftover = parser.feed('[]');
+		const leftover = parser.feed("[]");
 		assert.equal(rows.length, 0);
 		assert.equal(parser.finished, true);
 	});
@@ -158,17 +221,17 @@ describe("createRowStreamParser", () => {
 		const parser = createRowStreamParser((raw) => rows.push(raw));
 		parser.feed('[{"id":1}]');
 		assert.equal(parser.finished, true);
-		const result = parser.feed('trailing');
-		assert.equal(result, 'trailing');
+		const result = parser.feed("trailing");
+		assert.equal(result, "trailing");
 	});
 
 	test("嵌套数组作为元素", () => {
 		const rows = [];
 		const parser = createRowStreamParser((raw) => rows.push(raw));
-		parser.feed('[[1,2],[3,4]]');
+		parser.feed("[[1,2],[3,4]]");
 		assert.equal(rows.length, 2);
-		assert.equal(rows[0], '[1,2]');
-		assert.equal(rows[1], '[3,4]');
+		assert.equal(rows[0], "[1,2]");
+		assert.equal(rows[1], "[3,4]");
 	});
 
 	test("reset 重置所有状态", () => {

@@ -146,10 +146,14 @@ export function createJsonValueParser(onValue) {
 			//    注意：consumeUntil 是相对 buffer 起始的绝对位置，直接赋值即可。
 			if (consumeUntil > 0) {
 				this._consumed = consumeUntil;
-				this.readPos = this._consumed;
+				// 当有未完成的部分值（start !== -1）时，readPos 跳到 buffer 末尾
+				// 避免下次 feed 重扫已计入 nesting 的 [/{ 字符，
+				// 同时保留 nested/inString/escaped 状态供继续解析。
+				this.readPos = this.start !== -1 ? this.buffer.length : this._consumed;
 				if (this._consumed > 65536) {
+					if (this.start !== -1) this.start -= this._consumed;
 					this.buffer = this.buffer.slice(this._consumed);
-					this.readPos = 0;
+					this.readPos = this.buffer.length;
 					this._consumed = 0;
 				}
 			} else {
