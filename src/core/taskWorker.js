@@ -31,6 +31,8 @@ export class TaskWorker {
 	#metrics;
 	#sweepTimer = null;
 	#sweepIntervalMs;
+	/** @type {number} */
+	#nextBatchId = 1;
 
 	/**
 	 * @param {{
@@ -188,9 +190,14 @@ export class TaskWorker {
 		const now = performance.now();
 
 		const payload = buildBatchPayload(batch);
+		const batchId = this.#nextBatchId++;
+		const useWalBatch = payload.startsWith("BEGIN;");
 
+		// 分配 batchId 和 walBatch 标记（供 P0 stderr 传播使用）
 		for (const task of batch) {
 			task.startTime = now;
+			task.batchId = batchId;
+			task.walBatch = useWalBatch;
 		}
 		this.#inflightTasks.push(...batch);
 		this.#scheduleSweep();
@@ -303,6 +310,21 @@ export class TaskWorker {
 			return;
 		}
 		task.stderrText += chunk;
+
+		// P0 修复：WAL batch 中 stderr 传播到同一 batch 的所有任务
+		if (task.walBatch && task.batchId != null) {
+			for (const t of this.#pendingFinalizeTasks) {
+				if (t !== task && t.batchId === task.batchId) {
+					t.stderrText += chunk;
+				}
+			}
+			for (let i = this.#inflightHead; i < this.#inflightTasks.length; i++) {
+				const t = this.#inflightTasks[i];
+				if (t && t.batchId === task.batchId) {
+					t.stderrText += chunk;
+				}
+			}
+		}
 	}
 
 	#scheduleSweep() {

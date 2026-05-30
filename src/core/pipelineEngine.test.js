@@ -361,6 +361,143 @@ describe("PipelineEngine", () => {
 		});
 	});
 
+	// ── WAL batch 错误归因 ──────────────────────────
+	//
+	// P0: WAL batch 中如果某个任务 SQL 执行失败，stderr 被错误归因到第一个
+	// pendingFinalize 任务（而非实际执行失败的任务），导致：
+	//   - 成功任务被 reject（因错误文本贴错任务）
+	//   - 失败任务被 resolve（因错误文本贴到别的任务上，当前任务 stderrText 为空）
+	//
+	// 根因：WAL batch 中多个 execute 共享同一个 BEGIN/COMMIT 事务包裹，任一 SQL
+	// 失败后整个事务回滚。stderr 无法唯一定位到具体任务，应传播到 batch 中所有任务。
+	//
+	// 修复后：WAL batch 中任一任务 SQL 失败，该 batch 的所有任务全部 reject。
+
+	describe("WAL batch 错误归因", () => {
+		beforeEach(() => {
+			engine.deactivate();
+		});
+
+		test("修复: WAL batch 中非首任务失败时 batch 内所有任务全部 reject", async () => {
+			const { task: t1, promise: p1 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+				token: "wal-p0-t1",
+			});
+			const { task: t2, promise: p2 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (2)",
+				token: "wal-p0-t2",
+			});
+			const { task: t3, promise: p3 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+				token: "wal-p0-t3",
+			});
+
+			engine.enqueue(t1);
+			engine.enqueue(t2);
+			engine.enqueue(t3);
+			engine.activate();
+			engine.pump();
+
+			// 确认 WAL batch 被使用（3 个 execute 合批）
+			assert.equal(mockPM._writes.length, 1);
+			const payload = mockPM._writes[0];
+			assert.ok(payload.startsWith("BEGIN;"), "3 个 execute 应使用 WAL batch");
+
+			// ---- 模拟 sqlite3 输出 ----
+			// 所有 sentinel 都能正常输出（SELECT 不受事务内错误影响）
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"wal-p0-t1"}]`);
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"wal-p0-t2"}]`);
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"wal-p0-t3"}]`);
+
+			// 模拟 t3（第三个 INSERT）失败的 stderr
+			engine.handleStderrChunk("UNIQUE constraint failed: t.v");
+
+			await flush();
+
+			// 修复后：batch 内所有任务全部 reject（WAL 事务已回滚，所有操作均未提交）
+			await assert.rejects(p1, /UNIQUE constraint failed/, "t1 在同一 WAL batch 中，应被 reject");
+			await assert.rejects(p2, /UNIQUE constraint failed/, "t2 在同一 WAL batch 中，应被 reject");
+			await assert.rejects(p3, /UNIQUE constraint failed/, "t3 是实际失败的任务，应被 reject");
+
+			disarm(t1);
+			disarm(t2);
+			disarm(t3);
+		});
+
+		test("修复: WAL batch 中首任务失败时 batch 内所有任务全部 reject", async () => {
+			const { task: t1, promise: p1 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO non_existent VALUES (1)",
+				token: "wal-p0b-t1",
+			});
+			const { task: t2, promise: p2 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (2)",
+				token: "wal-p0b-t2",
+			});
+
+			engine.enqueue(t1);
+			engine.enqueue(t2);
+			engine.activate();
+			engine.pump();
+
+			assert.equal(mockPM._writes.length, 1);
+			assert.ok(mockPM._writes[0].startsWith("BEGIN;"), "应使用 WAL batch");
+
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"wal-p0b-t1"}]`);
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"wal-p0b-t2"}]`);
+			engine.handleStderrChunk("no such table: non_existent");
+
+			await flush();
+
+			// 修复后：batch 内所有任务全部 reject
+			await assert.rejects(p1, /no such table/, "t1 执行失败，应被 reject");
+			await assert.rejects(p2, /no such table/, "t2 在同一 WAL batch 中，应被 reject");
+
+			disarm(t1);
+			disarm(t2);
+		});
+
+		test("修复: WAL batch 中 stderr 在 sentinel 之前到达时也能正确传播", async () => {
+			const { task: t1, promise: p1 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+				token: "wal-early-t1",
+			});
+			const { task: t2, promise: p2 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (2)",
+				token: "wal-early-t2",
+			});
+
+			engine.enqueue(t1);
+			engine.enqueue(t2);
+			engine.activate();
+			engine.pump();
+
+			assert.equal(mockPM._writes.length, 1);
+			assert.ok(mockPM._writes[0].startsWith("BEGIN;"), "应使用 WAL batch");
+
+			// stderr 在 sentinel 之前到达（inflight 阶段）
+			engine.handleStderrChunk("syntax error");
+
+			// 然后 sentinel 才陆续到达
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"wal-early-t1"}]`);
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"wal-early-t2"}]`);
+
+			await flush();
+
+			await assert.rejects(p1, /syntax error/, "stderr 提前到达时，t1 仍应被 reject");
+			await assert.rejects(p2, /syntax error/, "stderr 提前到达时，t2 仍应被 reject");
+
+			disarm(t1);
+			disarm(t2);
+		});
+	});
+
 	// ── maxInflight ──────────────────────────────────
 
 	describe("maxInflight", () => {

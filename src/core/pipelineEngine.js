@@ -31,6 +31,8 @@ export class PipelineEngine {
 	#active = false;
 	#sweepTimer = null;
 	#sweepIntervalMs;
+	/** @type {number} */
+	#nextBatchId = 1;
 
 	/**
 	 * @param {import("./process.js").ProcessManager} processManager
@@ -163,9 +165,14 @@ export class PipelineEngine {
 		const now = performance.now();
 
 		const payload = buildBatchPayload(batch);
+		const batchId = this.#nextBatchId++;
+		const useWalBatch = payload.startsWith("BEGIN;");
 
+		// 分配 batchId 和 walBatch 标记（供 P0 stderr 传播使用）
 		for (const task of batch) {
 			task.startTime = now;
+			task.batchId = batchId;
+			task.walBatch = useWalBatch;
 		}
 		this.#inflightTasks.push(...batch);
 		this.#scheduleSweep();
@@ -279,6 +286,17 @@ export class PipelineEngine {
 	 * 如果没有匹配任务则通过 logger 输出。
 	 * @param {string} chunk
 	 */
+	/**
+	 * 处理 sqlite3 的 stderr 输出。
+	 * 将错误文本附加到 inflight 任务或 pendingFinalize 任务；
+	 * 如果没有匹配任务则通过 logger 输出。
+	 *
+	 * P0 修复：WAL batch 中多个 execute 共享同一个事务包裹，任一 SQL 失败时
+	 * 整个事务都会回滚。stderr 无法唯一定位到具体任务，因此传播到同一 batch
+	 * 的所有待结算和 inflight 任务，确保全部被 reject，避免数据静默丢失。
+	 *
+	 * @param {string} chunk
+	 */
 	handleStderrChunk(chunk) {
 		// 优先匹配 pendingFinalize 任务，确保延迟到达的 stderr chunk
 		// 被正确归因到原始任务，而非下一个 inflight 任务。
@@ -288,6 +306,23 @@ export class PipelineEngine {
 			return;
 		}
 		task.stderrText += chunk;
+
+		// P0 修复：WAL batch 中 stderr 传播到同一 batch 的所有任务
+		if (task.walBatch && task.batchId != null) {
+			// pendingFinalize 中的同 batch 任务
+			for (const t of this.#pendingFinalizeTasks) {
+				if (t !== task && t.batchId === task.batchId) {
+					t.stderrText += chunk;
+				}
+			}
+			// inflight 中尚未收到 sentinel 的同 batch 任务
+			for (let i = this.#inflightHead; i < this.#inflightTasks.length; i++) {
+				const t = this.#inflightTasks[i];
+				if (t && t.batchId === task.batchId) {
+					t.stderrText += chunk;
+				}
+			}
+		}
 	}
 
 	/**
