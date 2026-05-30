@@ -543,8 +543,9 @@ describe("PipelineEngine", () => {
 			const payload = mockPM._writes[0];
 			assert.ok(!payload.startsWith("BEGIN;"), "混合 batch 不应使用 WAL batch");
 
-			// 所有 sentinel 先到达
+			// 所有 sentinel 先到达（query 先送数据行，再送 sentinel）
 			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"nw-p0-t1"}]`);
+			engine.handleStdoutChunk(`[{"v":1}]`); // t2 数据行（SELECT 1 AS v）
 			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"nw-p0-t2"}]`);
 			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"nw-p0-t3"}]`);
 
@@ -693,21 +694,24 @@ describe("PipelineEngine", () => {
 			assert.ok(!batch1Payload.includes("cb-lt3"), "batch1 不含 lt3");
 			assert.ok(!batch2Payload.includes("cb-lt3"), "batch2 不含 lt3");
 
-			// lt1 sentinel → shift → pumpQueue 发出 lt3（inflight 降为 1，lt3 入列）
+			// lt1 数据行 + sentinel → shift → pumpQueue 发出 lt3（inflight 降为 1，lt3 入列）
+			localEngine.handleStdoutChunk(`[{"v":1}]`); // lt1 数据行（SELECT 1 AS v）
 			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"cb-lt1"}]`);
 			assert.equal(mockPM2._writes.length, 3, "lt1 完成 → lt3 发出");
 			const batch3Payload = mockPM2._writes[2];
 			assert.ok(batch3Payload.includes("cb-lt3"), "batch3 含 lt3");
 			assert.ok(!batch3Payload.includes("cb-lt4"), "batch3 不含 lt4（lt4 仍在队列）");
 
-			// lt2 sentinel → shift → pumpQueue 发出 lt4
+			// lt2 数据行 + sentinel → shift → pumpQueue 发出 lt4
+			localEngine.handleStdoutChunk(`[{"v":2}]`); // lt2 数据行（SELECT 2 AS v）
 			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"cb-lt2"}]`);
 			assert.equal(mockPM2._writes.length, 4, "lt2 完成 → lt4 发出");
 
-			// lt3 sentinel → pendingFinalize（此时 lt1,lt2,lt3 已在 pendingFinalize）
+			// lt3 sentinel → pendingFinalize（execute，无数据行）
 			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"cb-lt3"}]`);
 
-			// lt4 sentinel → pendingFinalize
+			// lt4 数据行 + sentinel → pendingFinalize
+			localEngine.handleStdoutChunk(`[{"v":4}]`); // lt4 数据行（SELECT 4 AS v）
 			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"cb-lt4"}]`);
 
 			// stderr（属于 lt3）在全部 sentinel 之后到达

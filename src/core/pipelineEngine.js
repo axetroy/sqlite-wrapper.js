@@ -296,24 +296,40 @@ export class PipelineEngine {
 	 * @param {string} chunk
 	 */
 	handleStderrChunk(chunk) {
-		// 优先匹配 pendingFinalize 任务，确保延迟到达的 stderr chunk
-		// 被正确归因到原始任务，而非下一个 inflight 任务。
-		const task = this.#pendingFinalizeTasks.values().next().value ?? this.#firstInflight();
+		const firstPending = this.#pendingFinalizeTasks.values().next().value;
+		const inflight = this.#firstInflight();
+		const task = firstPending ?? inflight;
+
 		if (!task) {
 			this.#logger?.error?.(chunk.trim());
 			return;
 		}
-		task.stderrText += chunk;
 
-		// P0 修复：传播到所有涉及的任务（不依赖 walBatch 标记）
+		// ── P0 根治：当所有任务都在 pendingFinalize（无 inflight）──
+		// 利用 query task.rows.length 特征定位实际失败者：
+		// sqlite3 对失败的 SQL 不输出任何 stdout 数据，只有 stderr。
+		// 因此 pendingFinalize 中 rows.length === 0 的 query 极可能失败源。
+		// 仅归因给这些任务，不传播到其他成功任务。
+		if (!inflight && firstPending) {
+			let zeroRowFound = false;
+			for (const t of this.#pendingFinalizeTasks) {
+				if (t.kind === "query" && t.rows.length === 0) {
+					t.stderrText += chunk;
+					zeroRowFound = true;
+				}
+			}
+			if (zeroRowFound) return;
+		}
+
+		// ── 安全兜底：附加到第一个任务并传播到所有 pending + inflight ──
+		// 适用于：WAL batch、无 0-row query 的非 WAL batch、或有 inflight 的情况
+		task.stderrText += chunk;
 		if (task.batchId != null) {
-			// pendingFinalize 中所有任务（同 batch + 跨 batch）
 			for (const t of this.#pendingFinalizeTasks) {
 				if (t !== task) {
 					t.stderrText += chunk;
 				}
 			}
-			// inflight 中所有任务（尚未收到 sentinel 的同 batch + 跨 batch）
 			for (let i = this.#inflightHead; i < this.#inflightTasks.length; i++) {
 				const t = this.#inflightTasks[i];
 				if (t && t !== task) {
