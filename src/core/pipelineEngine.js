@@ -286,12 +286,13 @@ export class PipelineEngine {
 	 * 如果没有匹配任务则通过 logger 输出。
 	 *
 	 * P0 修复：stderr 无法唯一定位到具体任务（stdout/stderr 独立管道，
-	 * OS 调度顺序不确定）。当收到 stderr 时，传播到同一 batch 及跨 batch
-	 * 管线化的所有 pendingFinalize 和 inflight 任务，确保：
-	 *   - 非 WAL batch 中非首任务失败时正确 reject（P0 A）
-	 *   - 跨 batch 管线化中非首 batch 任务失败时正确 reject（P0 C）
+	 * OS 调度顺序不确定）。保守策略：宁可误报不可漏报。
 	 *
-	 * 保守策略：宁可误报（reject 可能成功的任务）不可漏报（失败任务 resolve）。
+	 * 归因策略（由优到劣）：
+	 *   1. 零行归因 — pendingFinalize 中 rows.length === 0 的 query 极可能是失败源
+	 *   2. WAL batch — 整个事务回滚，传播到 batch 内所有任务
+	 *   3. 非 WAL batch — 传播到 pendingFinalize 中其他任务 + 第一个 inflight 任务
+	 *      （不传播到后续 inflight 任务，避免 macOS 上因 pipe 时序导致成功查询被误杀）
 	 *
 	 * @param {string} chunk
 	 */
@@ -305,37 +306,42 @@ export class PipelineEngine {
 			return;
 		}
 
-		// ── P0 根治：当所有任务都在 pendingFinalize（无 inflight）──
-		// 利用 query task.rows.length 特征定位实际失败者：
-		// sqlite3 对失败的 SQL 不输出任何 stdout 数据，只有 stderr。
+		// ── 零行归因（不受 inflight 有无影响）──
+		// sqlite3 对失败的 SQL 不输出任何 stdout 数据行，只有 stderr。
 		// 因此 pendingFinalize 中 rows.length === 0 的 query 极可能失败源。
 		// 仅归因给这些任务，不传播到其他成功任务。
-		if (!inflight && firstPending) {
-			let zeroRowFound = false;
-			for (const t of this.#pendingFinalizeTasks) {
-				if (t.kind === "query" && t.rows.length === 0) {
-					t.stderrText += chunk;
-					zeroRowFound = true;
-				}
+		for (const t of this.#pendingFinalizeTasks) {
+			if (t.kind === "query" && t.rows.length === 0) {
+				t.stderrText += chunk;
+				return;
 			}
-			if (zeroRowFound) return;
 		}
 
-		// ── 安全兜底：附加到第一个任务并传播到所有 pending + inflight ──
-		// 适用于：WAL batch、无 0-row query 的非 WAL batch、或有 inflight 的情况
+		// ── 安全兜底 ──
 		task.stderrText += chunk;
-		if (task.batchId != null) {
+		if (task.batchId == null) return;
+
+		// WAL batch：整个事务回滚，batch 内所有任务全部受影响
+		if (task.walBatch) {
 			for (const t of this.#pendingFinalizeTasks) {
-				if (t !== task) {
-					t.stderrText += chunk;
-				}
+				if (t !== task) t.stderrText += chunk;
 			}
 			for (let i = this.#inflightHead; i < this.#inflightTasks.length; i++) {
 				const t = this.#inflightTasks[i];
-				if (t && t !== task) {
-					t.stderrText += chunk;
-				}
+				if (t && t !== task) t.stderrText += chunk;
 			}
+			return;
+		}
+
+		// 非 WAL batch：传播到其他 pendingFinalize 任务（保守，execute 无零行可判断）
+		for (const t of this.#pendingFinalizeTasks) {
+			if (t !== task) t.stderrText += chunk;
+		}
+		// 仅传播到第一个 inflight 任务（sqlite3 当前正在处理的语句最可能是失败者）
+		// 避免传播到后续所有 inflight 任务，防止 macOS 上因 stderr pipe 提前到达
+		// 而误杀本应成功的查询。
+		if (inflight && inflight !== task) {
+			inflight.stderrText += chunk;
 		}
 	}
 
