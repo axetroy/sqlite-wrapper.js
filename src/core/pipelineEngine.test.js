@@ -9,22 +9,36 @@ import { createRowStreamParser, toError } from "./parser.js";
 
 /**
  * 创建一个存根 ProcessManager，记录 write 调用。
+ * 支持 onDrained（P0 修复新增），用于 drain 背压测试。
  */
 function createMockProcessManager() {
 	let _drainCallback = null;
+	/** @type {(() => void)[]} */
+	let _onDrainedCallbacks = [];
 	return {
 		_writes: [],
 		_draining: false,
 		get draining() { return this._draining; },
 		set draining(v) { this._draining = v; },
+		get hasPendingWrite() { return this._draining; },
 		write(payload) {
 			this._writes.push(payload);
 		},
 		setOnDrainCallback(fn) {
 			_drainCallback = fn;
 		},
+		onDrained(callback) {
+			if (!this._draining) {
+				callback();
+				return;
+			}
+			_onDrainedCallbacks.push(callback);
+		},
 		_triggerDrain() {
 			this._draining = false;
+			const cbs = _onDrainedCallbacks;
+			_onDrainedCallbacks = [];
+			for (const cb of cbs) cb();
 			_drainCallback?.();
 		},
 	};

@@ -200,4 +200,93 @@ describe("ProcessManager", { skip: !sqlite3Ready }, () => {
 			assert.equal(pm.draining, false, "drain 后 draining 应恢复为 false");
 		}
 	});
+
+	// ── P0 回归：draining 期间 write 不再丢数据 ────────────
+	//
+	// 修复前（P0 bug）：
+	//   1. 超大 payload → stream.write() 返回 false → #draining = true
+	//   2. draining 期间调用 write(marker) → `if (this.#draining) return;` → 静默丢弃
+	//   3. drain 事件后 marker 已永久丢失
+	//
+	// 修复后：
+	//   1. 同上触发 #draining = true
+	//   2. draining 期间 write(marker) → 存入 #writeBuffer 暂存，不丢失
+	//   3. drain 事件后 #flushBuffer() 逐个发送缓冲数据 → marker 正常到达 sqlite3
+	//   4. 最终 stdout 中应包含标记值 (99999)
+	test("P0 FIXED: draining 期间 write 不再丢失数据", async () => {
+		const pm = createPM();
+		pm.start();
+
+		/** @type {Buffer[]} */
+		const stdoutChunks = [];
+		pm.process.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
+		pm.process.stderr.on("data", () => {});
+
+		let drainCalled = false;
+		pm.setOnDrainCallback(() => { drainCalled = true; });
+
+		// ---- 步骤 1: 写入超大 payload → 触发 draining ----
+		//
+		// Node.js Writable 的默认 highWaterMark 是 16KB。
+		// stream.write(500KB+) 会在 buffer 中积累远超 16KB 的数据，返回 false。
+		// ProcessManager 收到 false 后设 #draining = true。
+		const largePayload = 'SELECT 1 AS v;\n'.repeat(30000); // ~510KB
+		pm.write(largePayload);
+		const wasDraining = pm.draining;
+
+		// ---- 步骤 2: 在 draining 期间写入标记 SQL ← 现在被缓冲而非丢弃 ----
+		if (pm.draining) {
+			pm.write("SELECT 99999 AS v;\n"); // 存入 #writeBuffer，等待 drain 后发送
+		}
+
+		// ---- 步骤 3: 等待 drain ----
+		if (pm.draining) {
+			await new Promise((resolve) => {
+				const check = setInterval(() => {
+					if (!pm.draining) {
+						clearInterval(check);
+						resolve();
+					}
+				}, 10);
+				setTimeout(() => {
+					clearInterval(check);
+					resolve();
+				}, 30000);
+			});
+		}
+
+		// ---- 步骤 4: drain 后写入验证 SQL — 这条正常到达 ----
+		pm.write("SELECT 88888 AS v;\n");
+
+		// ---- 步骤 5: 等待 sqlite3 执行完所有 SQL ----
+		await new Promise((r) => setTimeout(r, 5000));
+
+		const output = Buffer.concat(stdoutChunks).toString("utf-8");
+		const hasMarker = output.includes("99999");
+		const hasVerify = output.includes("88888");
+
+		console.log("=== P0 FIXED: stdout 分析 ===");
+		console.log("触发 draining:", wasDraining);
+		console.log("drain 回调已调用:", drainCalled);
+		console.log("输出长度:", output.length, "bytes");
+		console.log("输出前 200 字符:", output.slice(0, 200));
+		console.log("输出末 200 字符:", output.slice(-200));
+		console.log('包含 "99999" (draining 期间 buffer):', hasMarker);
+		console.log('包含 "88888" (drain 后写入):', hasVerify);
+
+		if (!wasDraining) {
+			console.log("注意: 未触发 draining，跳过断言");
+			assert.ok(hasMarker, "未触发 draining 时标记 SQL 应正常执行");
+			assert.ok(hasVerify, "验证 SQL 应正常执行");
+			return;
+		}
+
+		// 修复验证：draining 期间写入的数据应被缓冲，drain 后到达 sqlite3
+		assert.ok(
+			hasMarker,
+			`P0 已修复: draining=true 时 write("SELECT 99999") 被正确缓冲。\n` +
+			`输出中找到 99999，说明数据已通过 #writeBuffer 暂存并在 drain 后送达 sqlite3。`,
+		);
+		assert.ok(hasVerify, "drain 后写入的 SELECT 88888 应出现在 sqlite3 stdout 中");
+	});
 });

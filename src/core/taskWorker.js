@@ -166,7 +166,10 @@ export class TaskWorker {
 	 * stream 任务必须单独发送（不与其他任务合批），且需要等 inflight 清空后再发送。
 	 */
 	#pumpQueue() {
-		if (this.#processManager.draining) return;
+		if (this.#processManager.draining) {
+			this.#processManager.onDrained(() => this.#pumpQueue());
+			return;
+		}
 		if (this.#inflightCount() >= this.#maxInflight) return;
 
 		const batch = [];

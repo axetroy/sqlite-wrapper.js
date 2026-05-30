@@ -145,7 +145,10 @@ export class PipelineEngine {
 	 */
 	#pumpQueue() {
 		if (!this.#active) return;
-		if (this.#processManager.draining) return;
+		if (this.#processManager.draining) {
+			this.#processManager.onDrained(() => this.#pumpQueue());
+			return;
+		}
 		if (this.#inflightCount() >= this.#maxInflight) return;
 
 		const batch = [];
