@@ -498,6 +498,244 @@ describe("PipelineEngine", () => {
 		});
 	});
 
+	// ── P0: 非 WAL batch stderr 归因错误 ─────────────
+	//
+	// P0 场景 A（数据丢失）：
+	// 非 WAL batch（混合 execute+query 等导致 WAL 优化被禁用）中，若非首任务 SQL 执行失败，
+	// stderr 在全部 sentinel 到达后才被接收时，错误文本被归因到第一个 pendingFinalize 任务
+	//（而非实际失败的任务），导致：
+	//   - 第一个任务（实际成功）被 reject（错误归因）
+	//   - 实际失败的任务被 resolve（stderrText 为空）→ DATA LOSS
+	//
+	// 根因：handleStderrChunk 始终用 `pendingFinalizeTasks.values().next().value` 取第一个任务，
+	// 而 walBatch=false 的任务不触发 WAL batch 传播逻辑。
+
+	describe("P0: 非 WAL batch stderr 归因错误", () => {
+		beforeEach(() => {
+			engine.deactivate();
+		});
+
+		test("P0: 非 WAL batch 中任务失败(stderr 在 sentinel 之后到达) → stderr 贴到第一个 pendingFinalize 任务", async () => {
+			// 混合 execute + query 使 batch 不使用 WAL 优化
+			const { task: t1, promise: p1 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+				token: "nw-p0-t1",
+			});
+			const { task: t2, promise: p2 } = createTask({
+				kind: "query",
+				sql: "SELECT 1 AS v",
+				token: "nw-p0-t2",
+			});
+			const { task: t3, promise: p3 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+				token: "nw-p0-t3",
+			});
+
+			engine.enqueue(t1);
+			engine.enqueue(t2);
+			engine.enqueue(t3);
+			engine.activate();
+			engine.pump();
+
+			// 确认 payload 不是 WAL batch（不含 BEGIN;）
+			const payload = mockPM._writes[0];
+			assert.ok(!payload.startsWith("BEGIN;"), "混合 batch 不应使用 WAL batch");
+
+			// 所有 sentinel 先到达
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"nw-p0-t1"}]`);
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"nw-p0-t2"}]`);
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"nw-p0-t3"}]`);
+
+			// stderr（属于 t3）在全部 sentinel 之后到达
+			engine.handleStderrChunk("UNIQUE constraint failed");
+
+			await flush();
+
+			// ── P0: stderr 归因到 t1（第一个 pendingFinalize），不是 t3 ──
+			await assert.rejects(
+				p1,
+				/UNIQUE constraint/,
+				"P0 BUG: t1（SQL 执行成功）被错误 reject（拿到 t3 的 stderr）",
+			);
+			await assert.doesNotReject(
+				p3,
+				"P0 BUG: t3（SQL 执行失败）被错误 resolve — DATA LOSS（用户以为 INSERT 成功但实际未写入）",
+			);
+			await assert.doesNotReject(p2, "t2 不受影响");
+
+			disarm(t1);
+			disarm(t2);
+			disarm(t3);
+		});
+
+		test("P0: 非 WAL batch 中同步到达的 stderr 归因正确（不作为 P0——仅用于对比）", async () => {
+			// 如果 stderr 在 sentinel 之前到达，归因是正确的
+			const { task: t1, promise: p1 } = createTask({
+				kind: "query",
+				sql: "SELECT * FROM bad_table",
+				token: "nw-ok-t1",
+			});
+
+			engine.enqueue(t1);
+			engine.activate();
+			engine.pump();
+
+			// stderr 先到
+			engine.handleStderrChunk("no such table");
+			// sentinel 后到
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"nw-ok-t1"}]`);
+
+			await flush();
+
+			// 这个 case 是正确的（stderr 到达时 t1 是唯一个人口）
+			await assert.rejects(p1, /no such table/, "单个任务 stderr 先到 → 正确 reject");
+			disarm(t1);
+		});
+	});
+
+	// ── P0: setImmediate 之后到达的 stderr 丢失 ──────
+	//
+	// P0 场景 B（数据丢失）：
+	// stderr 在 setImmediate 回调（finalizePendingTasks）已经执行完毕之后才到达。
+	// 此时 pendingFinalizeTasks 已被清空，任务已结算（resolve），
+	// stderr 因找不到归属任务而被 logger 静默吞掉。
+	//
+	// 这意味着：一个 SQL 执行失败的任务被错误地 resolve 为成功，用户完全不知情。
+
+	describe("P0: setImmediate 之后抵达的 stderr 丢失", () => {
+		test("P0: stderr 在 finalizePendingTasks 之后到达 → stderr 被静默丢弃", async () => {
+			const { task, promise } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+				token: "late-stderr",
+			});
+			engine.enqueue(task);
+
+			// sentinel 到达
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"late-stderr"}]`);
+
+			// 等待 setImmediate 执行 finalizePendingTasks
+			await flush();
+
+			// 此时 task 已 resolve（无 stderrText）
+			const result = await promise;
+			assert.equal(result, undefined, "task 已被 resolve（虽然它应该 reject）");
+
+			// stderr 在 finalize 之后才到达
+			// handleStderrChunk 会寻找 pendingFinalize（空）→ inflight（空）→ logger
+			engine.handleStderrChunk("UNIQUE constraint failed");
+
+			// P0: stderrText 从未被设置到 task 上
+			assert.equal(
+				task.stderrText,
+				"",
+				"P0 BUG: stderrText 为空 — stderr 被静默丢弃（用户不知晓错误）",
+			);
+			// task 已经不可逆地 resolve 了
+			assert.equal(task.settled, true, "task 已结算（resolve）");
+
+			disarm(task);
+		});
+	});
+
+	// ── P0: 跨 batch 管线化 stderr 归因 ──────────────
+	//
+	// P0 场景 C（数据丢失）：
+	// 多个 batch 管线化发送时，所有 sentinel 可能在同一个 event loop tick 中到达，
+	// 所有任务累积到同一个 pendingFinalize Set 中。若中间 batch 的任务失败，
+	// stderr 归因到 Set 中第一个任务（最早 batch 的第一个任务），而非实际失败的任务。
+
+	describe("P0: 跨 batch 管线化 stderr 归因", () => {
+		test("P0: 两 batch 管线化，batch-2 任务失败 → stderr 归因到 batch-1 的第一个任务", async () => {
+			// 使用独立的 mockPM2 和 localEngine，避免与全局 engine 的 mockPM 干扰
+			const mockPM2 = createMockProcessManager();
+			const localEngine = new PipelineEngine(mockPM2, {
+				metrics,
+				statementTimeout: 5000,
+				batchSize: 10,
+				maxInflight: 2,
+			});
+			localEngine.activate();
+
+			const { task: lt1, promise: lp1 } = createTask({
+				kind: "query", sql: "SELECT 1 AS v", token: "cb-lt1",
+			});
+			const { task: lt2, promise: lp2 } = createTask({
+				kind: "query", sql: "SELECT 2 AS v", token: "cb-lt2",
+			});
+			const { task: lt3, promise: lp3 } = createTask({
+				kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "cb-lt3",
+			});
+			const { task: lt4, promise: lp4 } = createTask({
+				kind: "query", sql: "SELECT 4 AS v", token: "cb-lt4",
+			});
+
+			// 逐个入队。由于每个 enqueue 都触发 pumpQueue，且队列中每次只有刚入队的那个任务，
+			// 所以 lt1, lt2 被逐一发出（inflight 达到 maxInflight=2）。
+			localEngine.enqueue(lt1);
+			localEngine.enqueue(lt2);
+			localEngine.enqueue(lt3);
+			localEngine.enqueue(lt4);
+
+			// lt1, lt2 各占一个 inflight 槽（写 2 次）
+			assert.equal(mockPM2._writes.length, 2, "lt1, lt2 各一个 batch 发出");
+			const batch1Payload = mockPM2._writes[0];
+			assert.ok(batch1Payload.includes("cb-lt1"), "batch1 含 lt1");
+			const batch2Payload = mockPM2._writes[1];
+			assert.ok(batch2Payload.includes("cb-lt2"), "batch2 含 lt2");
+			assert.ok(!batch1Payload.includes("cb-lt3"), "batch1 不含 lt3");
+			assert.ok(!batch2Payload.includes("cb-lt3"), "batch2 不含 lt3");
+
+			// lt1 sentinel → shift → pumpQueue 发出 lt3（inflight 降为 1，lt3 入列）
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"cb-lt1"}]`);
+			assert.equal(mockPM2._writes.length, 3, "lt1 完成 → lt3 发出");
+			const batch3Payload = mockPM2._writes[2];
+			assert.ok(batch3Payload.includes("cb-lt3"), "batch3 含 lt3");
+			assert.ok(!batch3Payload.includes("cb-lt4"), "batch3 不含 lt4（lt4 仍在队列）");
+
+			// lt2 sentinel → shift → pumpQueue 发出 lt4
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"cb-lt2"}]`);
+			assert.equal(mockPM2._writes.length, 4, "lt2 完成 → lt4 发出");
+
+			// lt3 sentinel → pendingFinalize（此时 lt1,lt2,lt3 已在 pendingFinalize）
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"cb-lt3"}]`);
+
+			// lt4 sentinel → pendingFinalize
+			localEngine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"cb-lt4"}]`);
+
+			// stderr（属于 lt3）在全部 sentinel 之后到达
+			localEngine.handleStderrChunk("UNIQUE constraint failed");
+
+			await flush();
+
+			// ── P0: stderr 归因到 lt1（batch1 的第一个 pendingFinalize）──
+			await assert.rejects(
+				lp1,
+				/UNIQUE constraint/,
+				"P0 BUG: lt1（batch1 成功任务）被错误 reject（拿到 lt3 的 stderr）",
+			);
+			await assert.doesNotReject(
+				lp3,
+				"P0 BUG: lt3（实际失败）被错误 resolve — DATA LOSS（用户以为 INSERT 成功但未写入）",
+			);
+
+			// lt2 和 lt4 不受影响
+			await assert.doesNotReject(lp2, "lt2 不影响");
+			await assert.doesNotReject(lp4, "lt4 不影响");
+
+			assert.ok(lt1.stderrText.length > 0, "lt1.stderrText 被设置（错误归因）");
+			assert.equal(lt3.stderrText, "", "lt3.stderrText 为空 — DATA LOSS（实际失败者无错误记录）");
+
+			disarm(lt1);
+			disarm(lt2);
+			disarm(lt3);
+			disarm(lt4);
+			localEngine.kill();
+		});
+	});
+
 	// ── maxInflight ──────────────────────────────────
 
 	describe("maxInflight", () => {
