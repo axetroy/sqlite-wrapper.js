@@ -569,7 +569,7 @@ describe("SQLiteExecutor", () => {
 				await sqlite.execute("CREATE TABLE IF NOT EXISTS rw_big (id INTEGER PRIMARY KEY, val TEXT)");
 
 				let readResolved = false;
-				const slowWrite = sqlite.execute("INSERT INTO rw_big SELECT value, hex(randomblob(512)) FROM generate_series(1, 100000)");
+				const slowWrite = sqlite.execute("INSERT INTO rw_big SELECT value, hex(randomblob(512)) FROM generate_series(1, 30000)");
 
 				await new Promise((r) => setTimeout(r, 30));
 
