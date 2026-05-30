@@ -284,16 +284,14 @@ export class PipelineEngine {
 	 * 处理 sqlite3 的 stderr 输出。
 	 * 将错误文本附加到 inflight 任务或 pendingFinalize 任务；
 	 * 如果没有匹配任务则通过 logger 输出。
-	 * @param {string} chunk
-	 */
-	/**
-	 * 处理 sqlite3 的 stderr 输出。
-	 * 将错误文本附加到 inflight 任务或 pendingFinalize 任务；
-	 * 如果没有匹配任务则通过 logger 输出。
 	 *
-	 * P0 修复：WAL batch 中多个 execute 共享同一个事务包裹，任一 SQL 失败时
-	 * 整个事务都会回滚。stderr 无法唯一定位到具体任务，因此传播到同一 batch
-	 * 的所有待结算和 inflight 任务，确保全部被 reject，避免数据静默丢失。
+	 * P0 修复：stderr 无法唯一定位到具体任务（stdout/stderr 独立管道，
+	 * OS 调度顺序不确定）。当收到 stderr 时，传播到同一 batch 及跨 batch
+	 * 管线化的所有 pendingFinalize 和 inflight 任务，确保：
+	 *   - 非 WAL batch 中非首任务失败时正确 reject（P0 A）
+	 *   - 跨 batch 管线化中非首 batch 任务失败时正确 reject（P0 C）
+	 *
+	 * 保守策略：宁可误报（reject 可能成功的任务）不可漏报（失败任务 resolve）。
 	 *
 	 * @param {string} chunk
 	 */
@@ -307,18 +305,18 @@ export class PipelineEngine {
 		}
 		task.stderrText += chunk;
 
-		// P0 修复：WAL batch 中 stderr 传播到同一 batch 的所有任务
-		if (task.walBatch && task.batchId != null) {
-			// pendingFinalize 中的同 batch 任务
+		// P0 修复：传播到所有涉及的任务（不依赖 walBatch 标记）
+		if (task.batchId != null) {
+			// pendingFinalize 中所有任务（同 batch + 跨 batch）
 			for (const t of this.#pendingFinalizeTasks) {
-				if (t !== task && t.batchId === task.batchId) {
+				if (t !== task) {
 					t.stderrText += chunk;
 				}
 			}
-			// inflight 中尚未收到 sentinel 的同 batch 任务
+			// inflight 中所有任务（尚未收到 sentinel 的同 batch + 跨 batch）
 			for (let i = this.#inflightHead; i < this.#inflightTasks.length; i++) {
 				const t = this.#inflightTasks[i];
-				if (t && t.batchId === task.batchId) {
+				if (t && t !== task) {
 					t.stderrText += chunk;
 				}
 			}

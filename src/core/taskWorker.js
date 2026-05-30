@@ -311,16 +311,18 @@ export class TaskWorker {
 		}
 		task.stderrText += chunk;
 
-		// P0 修复：WAL batch 中 stderr 传播到同一 batch 的所有任务
-		if (task.walBatch && task.batchId != null) {
+		// P0 修复：传播到所有涉及的任务（不依赖 walBatch 标记）
+		if (task.batchId != null) {
+			// pendingFinalize 中所有任务（同 batch + 跨 batch）
 			for (const t of this.#pendingFinalizeTasks) {
-				if (t !== task && t.batchId === task.batchId) {
+				if (t !== task) {
 					t.stderrText += chunk;
 				}
 			}
+			// inflight 中所有任务
 			for (let i = this.#inflightHead; i < this.#inflightTasks.length; i++) {
 				const t = this.#inflightTasks[i];
-				if (t && t.batchId === task.batchId) {
+				if (t && t !== task) {
 					t.stderrText += chunk;
 				}
 			}

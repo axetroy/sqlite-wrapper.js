@@ -515,7 +515,7 @@ describe("PipelineEngine", () => {
 			engine.deactivate();
 		});
 
-		test("P0: 非 WAL batch 中任务失败(stderr 在 sentinel 之后到达) → stderr 贴到第一个 pendingFinalize 任务", async () => {
+		test("P0: 非 WAL batch 中任务失败(stderr 在 sentinel 之后到达) → stderr 传播到同 batch 所有任务", async () => {
 			// 混合 execute + query 使 batch 不使用 WAL 优化
 			const { task: t1, promise: p1 } = createTask({
 				kind: "execute",
@@ -553,17 +553,22 @@ describe("PipelineEngine", () => {
 
 			await flush();
 
-			// ── P0: stderr 归因到 t1（第一个 pendingFinalize），不是 t3 ──
+			// ── 全部 pendingFinalize 任务都拿到 stderr → 全部 reject ──
 			await assert.rejects(
 				p1,
 				/UNIQUE constraint/,
-				"P0 BUG: t1（SQL 执行成功）被错误 reject（拿到 t3 的 stderr）",
+				"t1（SQL 执行成功）因 batch 内 stderr 传播而被 reject",
 			);
-			await assert.doesNotReject(
+			await assert.rejects(
+				p2,
+				/UNIQUE constraint/,
+				"t2（query）因 batch 内 stderr 传播而被 reject",
+			);
+			await assert.rejects(
 				p3,
-				"P0 BUG: t3（SQL 执行失败）被错误 resolve — DATA LOSS（用户以为 INSERT 成功但实际未写入）",
+				/UNIQUE constraint/,
+				"t3（SQL 执行失败）正确拿到 stderr → reject",
 			);
-			await assert.doesNotReject(p2, "t2 不受影响");
 
 			disarm(t1);
 			disarm(t2);
@@ -648,7 +653,7 @@ describe("PipelineEngine", () => {
 	// stderr 归因到 Set 中第一个任务（最早 batch 的第一个任务），而非实际失败的任务。
 
 	describe("P0: 跨 batch 管线化 stderr 归因", () => {
-		test("P0: 两 batch 管线化，batch-2 任务失败 → stderr 归因到 batch-1 的第一个任务", async () => {
+		test("P0: 两 batch 管线化，batch-2 任务失败 → stderr 传播到所有 pendingFinalize 任务", async () => {
 			// 使用独立的 mockPM2 和 localEngine，避免与全局 engine 的 mockPM 干扰
 			const mockPM2 = createMockProcessManager();
 			const localEngine = new PipelineEngine(mockPM2, {
@@ -710,23 +715,32 @@ describe("PipelineEngine", () => {
 
 			await flush();
 
-			// ── P0: stderr 归因到 lt1（batch1 的第一个 pendingFinalize）──
+			// ── 所有 pendingFinalize 任务都拿到 stderr → 全部 reject ──
 			await assert.rejects(
 				lp1,
 				/UNIQUE constraint/,
-				"P0 BUG: lt1（batch1 成功任务）被错误 reject（拿到 lt3 的 stderr）",
+				"lt1（batch1 成功任务）因跨 batch stderr 传播而被 reject",
 			);
-			await assert.doesNotReject(
+			await assert.rejects(
+				lp2,
+				/UNIQUE constraint/,
+				"lt2（batch1 成功 query）因跨 batch stderr 传播而被 reject",
+			);
+			await assert.rejects(
 				lp3,
-				"P0 BUG: lt3（实际失败）被错误 resolve — DATA LOSS（用户以为 INSERT 成功但未写入）",
+				/UNIQUE constraint/,
+				"lt3（实际失败）正确拿到 stderr → reject",
+			);
+			await assert.rejects(
+				lp4,
+				/UNIQUE constraint/,
+				"lt4（batch2 成功 query）因跨 batch stderr 传播而被 reject",
 			);
 
-			// lt2 和 lt4 不受影响
-			await assert.doesNotReject(lp2, "lt2 不影响");
-			await assert.doesNotReject(lp4, "lt4 不影响");
-
-			assert.ok(lt1.stderrText.length > 0, "lt1.stderrText 被设置（错误归因）");
-			assert.equal(lt3.stderrText, "", "lt3.stderrText 为空 — DATA LOSS（实际失败者无错误记录）");
+			assert.ok(lt1.stderrText.length > 0, "lt1.stderrText 被设置（跨 batch 传播）");
+			assert.ok(lt2.stderrText.length > 0, "lt2.stderrText 被设置（跨 batch 传播）");
+			assert.ok(lt3.stderrText.length > 0, "lt3.stderrText 被设置（正确归因）");
+			assert.ok(lt4.stderrText.length > 0, "lt4.stderrText 被设置（跨 batch 传播）");
 
 			disarm(lt1);
 			disarm(lt2);
