@@ -896,13 +896,15 @@ describe("SQLiteExecutor", () => {
 			}
 		});
 
-		test("Symbol.asyncDispose 委托给 close（await using）", async () => {
-			{
-				await using db = new SQLiteExecutor({ binary: SQLite3BinaryFile });
+		test("Symbol.asyncDispose 委托给 close", async () => {
+			// 兼容旧版 Node.js：手动调用 asyncDispose 代替 await using
+			const db = new SQLiteExecutor({ binary: SQLite3BinaryFile });
+			try {
 				const rows = await db.query("SELECT 1 AS v");
 				assert.deepEqual(rows, [{ v: 1 }]);
+			} finally {
+				await db[Symbol.asyncDispose]();
 			}
-			// 退出块时 asyncDispose 应已调用 close，进程已终止
 		});
 
 	test("Symbol.dispose 同步关闭不抛出", () => {
