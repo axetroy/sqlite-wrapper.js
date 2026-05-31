@@ -2,7 +2,7 @@ import { Queue } from "./queue.js";
 import { InflightTracker } from "./inflightTracker.js";
 import { createJsonValueParser } from "./parser.js";
 import { settleTask } from "./settleUtils.js";
-import { handleParsedValue, createSweeper, createFinalizeScheduler, createPumpQueue, rejectAllTasks, prepareTaskTimeout } from "./pipelineUtils.js";
+import { handleParsedValue, createSweeper, createFinalizeScheduler, createPumpQueue, rejectAllTasks, prepareTaskTimeout, handleSentinelTask, handleStderrChunk } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
@@ -178,92 +178,27 @@ export class PipelineEngine {
 	}
 
 	/**
-	 * sentinel token 命中后的统一处理逻辑。
-	 * 将任务放入 pendingFinalize，延迟一帧结算以等待可能的 stderr。
+	 * sentinel token 命中后的统一处理逻辑（委托句共享函数）。
 	 */
 	#afterSentinel(task) {
-		if (task.timedout) {
-			this.#pumpQueue();
-			return;
-		}
-
-		// 无论 stderrText 是否为空，都走 pendingFinalize 延迟结算。
-		// 原因：Windows 上 sqlite3 的 stderr 输出可能被 OS pipe 拆分为多个 chunk，
-		// 若在此处立即 reject，后续到达的 stderr chunk 会丢失或被错误地配给下一个 inflight 任务。
-		// 通过 pendingFinalize + setImmediate 给 stderr chunk 留足时间到达。
-		if (task.consumerError) {
-			this.#settleTask(task, task.consumerError, undefined);
-			this.#pumpQueue();
-			return;
-		}
-
-		this.#pendingFinalizeTasks.add(task);
-		this.#scheduleFinalizeCheck();
-		this.#pumpQueue();
+		handleSentinelTask(task, {
+			settleTask: (t, e, v) => this.#settleTask(t, e, v),
+			pendingFinalizeTasks: this.#pendingFinalizeTasks,
+			scheduleFinalizeCheck: () => this.#scheduleFinalizeCheck(),
+			pumpQueue: () => this.#pumpQueue(),
+		});
 	}
 
 	/**
-	 * 处理 sqlite3 的 stderr 输出。
-	 * 将错误文本附加到 inflight 任务或 pendingFinalize 任务；
-	 * 如果没有匹配任务则通过 logger 输出。
-	 *
-	 * P0 修复：stderr 无法唯一定位到具体任务（stdout/stderr 独立管道，
-	 * OS 调度顺序不确定）。保守策略：宁可误报不可漏报。
-	 *
-	 * 归因策略（由优到劣）：
-	 *   1. 零行归因 — pendingFinalize 中 rows.length === 0 的 query 极可能是失败源
-	 *   2. WAL batch — 整个事务回滚，传播到 batch 内所有任务
-	 *   3. 非 WAL batch — 传播到 pendingFinalize 中其他任务 + 第一个 inflight 任务
-	 *      （不传播到后续 inflight 任务，避免 macOS 上因 pipe 时序导致成功查询被误杀）
-	 *
+	 * 处理 sqlite3 的 stderr 输出（委托给共享函数）。
 	 * @param {string} chunk
 	 */
 	handleStderrChunk(chunk) {
-		const firstPending = this.#pendingFinalizeTasks.values().next().value;
-		const inflight = this.#inflight.first;
-		const task = firstPending ?? inflight;
-
-		if (!task) {
-			this.#logger?.error?.(chunk.trim());
-			return;
-		}
-
-		// ── 零行归因（不受 inflight 有无影响）──
-		// sqlite3 对失败的 SQL 不输出任何 stdout 数据行，只有 stderr。
-		// 因此 pendingFinalize 中 rows.length === 0 的 query 极可能失败源。
-		// 仅归因给这些任务，不传播到其他成功任务。
-		for (const t of this.#pendingFinalizeTasks) {
-			if (t.kind === "query" && t.rows.length === 0) {
-				t.stderrText += chunk;
-				return;
-			}
-		}
-
-		// ── 安全兜底 ──
-		task.stderrText += chunk;
-		if (task.batchId == null) return;
-
-		// WAL batch：整个事务回滚，batch 内所有任务全部受影响
-		if (task.walBatch) {
-			for (const t of this.#pendingFinalizeTasks) {
-				if (t !== task) t.stderrText += chunk;
-			}
-			this.#inflight.forEach((t) => {
-				if (t !== task) t.stderrText += chunk;
-			});
-			return;
-		}
-
-		// 非 WAL batch：传播到其他 pendingFinalize 任务（保守，execute 无零行可判断）
-		for (const t of this.#pendingFinalizeTasks) {
-			if (t !== task) t.stderrText += chunk;
-		}
-		// 仅传播到第一个 inflight 任务（sqlite3 当前正在处理的语句最可能是失败者）
-		// 避免传播到后续所有 inflight 任务，防止 macOS 上因 stderr pipe 提前到达
-		// 而误杀本应成功的查询。
-		if (inflight && inflight !== task) {
-			inflight.stderrText += chunk;
-		}
+		handleStderrChunk(chunk, {
+			inflight: this.#inflight,
+			pendingFinalizeTasks: this.#pendingFinalizeTasks,
+			logger: this.#logger,
+		});
 	}
 
 	#settleTask(task, error, value) {

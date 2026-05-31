@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { finalizePendingTasks, prepareTaskTimeout, handleParsedValue, createSweeper, createFinalizeScheduler, createPumpQueue, rejectAllTasks } from "./pipelineUtils.js";
+import { finalizePendingTasks, prepareTaskTimeout, handleParsedValue, createSweeper, createFinalizeScheduler, createPumpQueue, rejectAllTasks, handleSentinelTask, handleStderrChunk } from "./pipelineUtils.js";
 import { InflightTracker } from "./inflightTracker.js";
 import { Queue } from "./queue.js";
 
@@ -582,5 +582,105 @@ describe("rejectAllTasks", () => {
 		rejectAllTasks({ inflight, queue, pendingFinalizeTasks, settleTask, error });
 		assert.equal(settled.length, 1);
 		assert.equal(settled[0].task, t);
+	});
+});
+
+// ─── handleSentinelTask ───
+
+describe("handleSentinelTask", () => {
+	function makeContext() {
+		const settleCalls = [];
+		const pendingFinalizeTasks = new Set();
+		let _scheduleCalls = 0;
+		let _pumpCalls = 0;
+		return {
+			settleTask: (t, e, v) => { settleCalls.push({ t, e, v }); },
+			pendingFinalizeTasks,
+			scheduleFinalizeCheck: () => { _scheduleCalls++; },
+			pumpQueue: () => { _pumpCalls++; },
+			settleCalls,
+			get scheduleCalls() { return _scheduleCalls; },
+			get pumpCalls() { return _pumpCalls; },
+		};
+	}
+
+	test("timedout 任务只调用 pumpQueue", () => {
+		const ctx = makeContext();
+		handleSentinelTask({ timedout: true }, ctx);
+		assert.equal(ctx.settleCalls.length, 0, "timedout 不应结算");
+		assert.equal(ctx.scheduleCalls, 0, "timedout 不应调度延迟结算");
+		assert.equal(ctx.pumpCalls, 1, "timedout 应触发泵送");
+	});
+
+	test("consumerError 立即 settle 并泵送", () => {
+		const ctx = makeContext();
+		const err = new Error("consumer broke");
+		handleSentinelTask({ timedout: false, consumerError: err }, ctx);
+		assert.equal(ctx.settleCalls.length, 1, "consumerError 应结算");
+		assert.equal(ctx.settleCalls[0].e, err);
+		assert.equal(ctx.pumpCalls, 1);
+	});
+
+	test("正常任务进入 pendingFinalize", () => {
+		const ctx = makeContext();
+		const task = { timedout: false, consumerError: null };
+		handleSentinelTask(task, ctx);
+		assert.equal(ctx.settleCalls.length, 0, "不应立即结算");
+		assert.ok(ctx.pendingFinalizeTasks.has(task), "应加入 pendingFinalize");
+		assert.equal(ctx.scheduleCalls, 1, "应调度延迟结算");
+		assert.equal(ctx.pumpCalls, 1, "应触发泵送");
+	});
+});
+
+// ─── handleStderrChunk ───
+
+describe("handleStderrChunk", () => {
+	function makeContext() {
+		const pendingFinalizeTasks = new Set();
+		const inflight = new InflightTracker();
+		const logger = { errorCalls: /** @type {string[]} */([]), error(msg) { this.errorCalls.push(msg); } };
+		return { inflight, pendingFinalizeTasks, logger };
+	}
+
+	test("无匹配任务时通过 logger 输出", () => {
+		const ctx = makeContext();
+		handleStderrChunk("error msg", ctx);
+		assert.equal(ctx.logger.errorCalls.length, 1);
+		assert.ok(ctx.logger.errorCalls[0].includes("error msg"));
+	});
+
+	test("归因到 inflight 第一个任务", () => {
+		const ctx = makeContext();
+		const task = { kind: "execute", stderrText: "", batchId: null };
+		ctx.inflight.push(task);
+		handleStderrChunk("some error", ctx);
+		assert.ok(task.stderrText.includes("some error"));
+	});
+
+	test("零行归因：pendingFinalize 中 rows.length===0 的 query 优先", () => {
+		const ctx = makeContext();
+		const goodTask = { kind: "query", rows: [1], stderrText: "" };
+		const badTask = { kind: "query", rows: [], stderrText: "" };
+		ctx.pendingFinalizeTasks.add(goodTask);
+		ctx.pendingFinalizeTasks.add(badTask);
+		// inflight 也有任务，但零行归因优先级更高
+		ctx.inflight.push({ kind: "execute", stderrText: "" });
+
+		handleStderrChunk("syntax error", ctx);
+		assert.equal(badTask.stderrText, "syntax error", "零行任务应获得 stderr");
+		assert.equal(goodTask.stderrText, "", "有行任务不应获得 stderr");
+	});
+
+	test("batchId 为空时不传播", () => {
+		const ctx = makeContext();
+		const t1 = { kind: "execute", stderrText: "", batchId: null };
+		const t2 = { kind: "execute", stderrText: "", batchId: null };
+		ctx.inflight.push(t1);
+		ctx.pendingFinalizeTasks.add(t2);
+
+		handleStderrChunk("error", ctx);
+		// 实现优先归因到 firstPending（t2），因 batchId 为空不传播
+		assert.equal(t1.stderrText, "", "inflight 任务不应获得 stderr");
+		assert.ok(t2.stderrText.includes("error"), "pendingFinalize 第一个任务获得 stderr");
 	});
 });

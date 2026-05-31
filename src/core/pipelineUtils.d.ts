@@ -106,6 +106,48 @@ export function handleParsedValue(
 	callbacks: ParsedValueCallbacks,
 ): void;
 
+// ─── handleSentinelTask ───
+
+export interface SentinelTaskOptions {
+	/** 结算回调，形式为 (task, error, value) => void */
+	settleTask: (task: object, error: Error | null, value: any) => void;
+	/** pendingFinalize 任务集合 */
+	pendingFinalizeTasks: Set<object>;
+	/** 触发延迟结算的回调 */
+	scheduleFinalizeCheck: () => void;
+	/** 泵送回调 */
+	pumpQueue: () => void;
+}
+
+/**
+ * 处理 sentinel token 命中后的任务结算。
+ * PipelineEngine 和 TaskWorker 共享此逻辑，统一延迟结算策略。
+ *
+ * @param task - 已从 inflight shift 的任务
+ * @param options - 回调集合
+ */
+export function handleSentinelTask(task: object, options: SentinelTaskOptions): void;
+
+// ─── handleStderrChunk ───
+
+export interface StderrChunkOptions {
+	/** inflight 任务跟踪器 */
+	inflight: InflightTracker;
+	/** pendingFinalize 任务集合 */
+	pendingFinalizeTasks: Set<object>;
+	/** 可选的日志记录器 */
+	logger?: { error?: (msg: string) => void };
+}
+
+/**
+ * 处理 sqlite3 的 stderr 输出，将其归因到合适的任务。
+ * PipelineEngine 和 TaskWorker 共享此逻辑。
+ *
+ * @param chunk - stderr 文本块
+ * @param options - 上下文依赖
+ */
+export function handleStderrChunk(chunk: string, options: StderrChunkOptions): void;
+
 // ─── createPumpQueue ───
 
 export interface PumpQueueOptions {

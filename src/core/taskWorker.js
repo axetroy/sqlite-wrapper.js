@@ -3,7 +3,7 @@ import { Queue } from "./queue.js";
 import { InflightTracker } from "./inflightTracker.js";
 import { createJsonValueParser, toError } from "./parser.js";
 import { settleTask } from "./settleUtils.js";
-import { handleParsedValue, createSweeper, createFinalizeScheduler, createPumpQueue, rejectAllTasks, prepareTaskTimeout } from "./pipelineUtils.js";
+import { handleParsedValue, createSweeper, createFinalizeScheduler, createPumpQueue, rejectAllTasks, prepareTaskTimeout, handleSentinelTask, handleStderrChunk } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
@@ -177,66 +177,22 @@ export class TaskWorker {
 		this.#pump();
 	}
 
-	/** sentinel token 命中后的统一处理逻辑。 */
+	/** sentinel token 命中后的统一处理逻辑（委托给共享函数）。 */
 	#afterSentinel(task) {
-		if (task.timedout) {
-			this.#pumpQueue();
-			return;
-		}
-
-		if (task.stderrText) {
-			this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-			this.#pumpQueue();
-			return;
-		}
-
-		if (task.consumerError) {
-			this.#settleTask(task, task.consumerError, undefined);
-			this.#pumpQueue();
-			return;
-		}
-
-		// stderr 和 stdout 是独立的 OS 管道，data 事件触发顺序无法保证。
-		// 延迟一帧再 finalize，给 stderr 一个事件循环周期的时间到达。
-		// 多个 task 共享同一个 setImmediate，减少事件循环开销。
-		this.#pendingFinalizeTasks.add(task);
-		this.#scheduleFinalizeCheck();
-		this.#pumpQueue();
+		handleSentinelTask(task, {
+			settleTask: (t, e, v) => this.#settleTask(t, e, v),
+			pendingFinalizeTasks: this.#pendingFinalizeTasks,
+			scheduleFinalizeCheck: () => this.#scheduleFinalizeCheck(),
+			pumpQueue: () => this.#pumpQueue(),
+		});
 	}
 
 	#handleStderrChunk(chunk) {
-		const firstPending = this.#pendingFinalizeTasks.values().next().value;
-		const inflight = this.#inflight.first;
-		const task = firstPending ?? inflight;
-
-		if (!task) {
-			this.#logger?.error?.(chunk.trim());
-			return;
-		}
-
-		// ── P0 根治：当所有任务都在 pendingFinalize（无 inflight）──
-		// 利用 query task.rows.length 特征定位实际失败者。
-		if (!inflight && firstPending) {
-			let zeroRowFound = false;
-			for (const t of this.#pendingFinalizeTasks) {
-				if (t.kind === "query" && t.rows.length === 0) {
-					t.stderrText += chunk;
-					zeroRowFound = true;
-				}
-			}
-			if (zeroRowFound) return;
-		}
-
-		// ── 安全兜底 ──
-		task.stderrText += chunk;
-		if (task.batchId != null) {
-			for (const t of this.#pendingFinalizeTasks) {
-				if (t !== task) t.stderrText += chunk;
-			}
-			this.#inflight.forEach((t) => {
-				if (t !== task) t.stderrText += chunk;
-			});
-		}
+		handleStderrChunk(chunk, {
+			inflight: this.#inflight,
+			pendingFinalizeTasks: this.#pendingFinalizeTasks,
+			logger: this.#logger,
+		});
 	}
 
 	#settleTask(task, error, value) {
