@@ -1,5 +1,5 @@
 import { settleTask, collectQueryRows, processStreamRows } from "./settleUtils.js";
-import { isSentinelRaw, isSentinelRow } from "./protocol.js";
+import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { toError } from "./parser.js";
 import { createTimeoutError } from "../utils/timeout.js";
 
@@ -157,4 +157,93 @@ export function handleParsedValue(raw, inflight, { afterSentinel, rejectAll }) {
 	if (task.kind === "stream") {
 		processStreamRows(task, parsed);
 	}
+}
+
+/**
+ * 创建一个泵送（pump）函数，将队列中的任务批量发送给 sqlite3 进程。
+ *
+ * PipelineEngine 和 TaskWorker 共享此工厂，消除 #pumpQueue 方法的重复。
+ * 调用方可通过 active 守卫（可选）控制是否允许泵送。
+ *
+ * @param {{
+ *   queue: import("./queue.js").Queue,
+ *   inflight: import("./inflightTracker.js").InflightTracker,
+ *   processManager: { draining: boolean, write: (data: string) => void, onDrained: (cb: () => void) => void },
+ *   sweeper: { schedule: () => void },
+ *   batchSize: number,
+ *   maxInflight: number,
+ * }} params
+ * @returns {() => void} 泵送函数，调用后尝试从队列取出 batch 发送
+ */
+export function createPumpQueue({ queue, inflight, processManager, sweeper, batchSize, maxInflight }) {
+	let nextBatchId = 1;
+	return function pump() {
+		if (processManager.draining) {
+			processManager.onDrained(() => pump());
+			return;
+		}
+		if (inflight.count >= maxInflight) return;
+
+		const batch = [];
+		while (batch.length < batchSize && !queue.isEmpty() && inflight.count + batch.length < maxInflight) {
+			const task = queue.peek();
+			if (task.kind === "stream" && (batch.length > 0 || inflight.count > 0)) break;
+			queue.dequeue();
+			batch.push(task);
+		}
+		if (batch.length === 0) return;
+
+		const now = performance.now();
+		const payload = buildBatchPayload(batch);
+		const batchId = nextBatchId++;
+		const useWalBatch = payload.startsWith("BEGIN;");
+
+		for (const task of batch) {
+			task.startTime = now;
+			task.batchId = batchId;
+			task.walBatch = useWalBatch;
+		}
+		inflight.push(...batch);
+		sweeper.schedule();
+		processManager.write(payload);
+	};
+}
+
+/**
+ * 拒绝所有待处理任务（inflight、队列、pendingFinalize）。
+ *
+ * 提取自 PipelineEngine.rejectAll 和 TaskWorker.#rejectAll，
+ * 消除二者间的逻辑重复。调用方负责清理各自特有的资源
+ * （如 sharedValueParser.reset() 或 sweeper.clear()）。
+ *
+ * @param {{
+ *   inflight: import("./inflightTracker.js").InflightTracker,
+ *   queue: import("./queue.js").Queue,
+ *   pendingFinalizeTasks: Set<object>,
+ *   settleTask: (task: object, error: Error | null, value: any) => void,
+ *   error: Error,
+ * }} params
+ */
+export function rejectAllTasks({ inflight, queue, pendingFinalizeTasks, settleTask, error }) {
+	// 1. 取走并清空 inflight
+	const all = inflight.toArray();
+	inflight.clear();
+
+	// 2. 结算队列中的任务（尚未发送）
+	let queued = queue.dequeue();
+	while (queued) {
+		settleTask(queued, error, undefined);
+		queued = queue.dequeue();
+	}
+
+	// 3. 结算 inflight 任务（正在执行）
+	for (const task of all) {
+		settleTask(task, error, undefined);
+	}
+
+	// 4. 结算 pendingFinalize 任务（等待延迟结算）
+	for (const task of pendingFinalizeTasks) {
+		settleTask(task, error, undefined);
+	}
+	pendingFinalizeTasks.clear();
 }

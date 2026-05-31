@@ -16,6 +16,9 @@ export class LRUCache {
 
 	/**
 	 * @param {{ maxSize?: number, maxKeyLength?: number, maxValueLength?: number }} [options]
+	 *   maxSize - 最大缓存条目数（默认 256，自动提升到至少 1）
+	 *   maxKeyLength - key 最大长度，超长 key 不缓存（默认 4096）
+	 *   maxValueLength - value 字符串/数组的最大长度，超长不缓存（默认 Infinity）
 	 */
 	constructor({ maxSize = 256, maxKeyLength = 4096, maxValueLength = Infinity } = {}) {
 		this.#maxSize = Math.max(1, maxSize);
@@ -25,7 +28,7 @@ export class LRUCache {
 
 	/**
 	 * 获取缓存值。命中时将条目提升到末尾；未命中或 key 不合法时返回 undefined。
-	 * @param {string} key
+	 * @param {string} key - 缓存键
 	 * @returns {T | undefined}
 	 */
 	get(key) {
@@ -39,9 +42,9 @@ export class LRUCache {
 
 	/**
 	 * 设置缓存值。达到容量上限时淘汰最旧条目。超长 key 不缓存。
-	 * 对字符串/数组类型检查 maxValueLength；其他类型不做长度过滤。
-	 * @param {string} key
-	 * @param {T} value
+	 * 对字符串/数组类型检查 maxValueLength；其他类型不做长度过滤（如对象）。
+	 * @param {string} key - 缓存键
+	 * @param {T} value - 缓存值
 	 */
 	set(key, value) {
 		if (typeof key !== "string" || key.length > this.#maxKeyLength) return;

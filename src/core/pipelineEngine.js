@@ -1,9 +1,8 @@
 import { Queue } from "./queue.js";
 import { InflightTracker } from "./inflightTracker.js";
 import { createJsonValueParser } from "./parser.js";
-import { buildBatchPayload } from "./protocol.js";
 import { settleTask } from "./settleUtils.js";
-import { handleParsedValue, createSweeper, createFinalizeScheduler, prepareTaskTimeout } from "./pipelineUtils.js";
+import { handleParsedValue, createSweeper, createFinalizeScheduler, createPumpQueue, rejectAllTasks, prepareTaskTimeout } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
@@ -31,8 +30,8 @@ export class PipelineEngine {
 	#sweeper;
 	/** 由 createFinalizeScheduler 创建的闭包，替代 #scheduleFinalizeCheck 方法 */
 	#scheduleFinalizeCheck;
-	/** @type {number} */
-	#nextBatchId = 1;
+	/** 由 createPumpQueue 创建的泵送函数（不含 active 守卫） */
+	#pump;
 
 	/**
 	 * @param {import("./process.js").ProcessManager} processManager
@@ -75,6 +74,14 @@ export class PipelineEngine {
 					this.#onTaskTimeout?.(task);
 				}
 			},
+		});
+		this.#pump = createPumpQueue({
+			queue: this.#queue,
+			inflight: this.#inflight,
+			processManager: this.#processManager,
+			sweeper: this.#sweeper,
+			batchSize: this.#batchSize,
+			maxInflight: this.#maxInflight,
 		});
 		this.#scheduleFinalizeCheck = createFinalizeScheduler({
 			pendingFinalizeTasks: this.#pendingFinalizeTasks,
@@ -141,42 +148,12 @@ export class PipelineEngine {
 	}
 
 	/**
-	 * 从队列批量取出任务发送给 sqlite3 进程。
-	 * 非 stream 任务最多批量发送 DEFAULT_BATCH_SIZE 个；
-	 * stream 任务独占发送（队列中有 stream 时不会与其他任务打包）。
+	 * 从队列批量取出任务发送给 sqlite3 进程（active 守卫包装）。
+	 * 实际逻辑委托给 this.#pump（由 createPumpQueue 创建）。
 	 */
 	#pumpQueue() {
 		if (!this.#active) return;
-		if (this.#processManager.draining) {
-			this.#processManager.onDrained(() => this.#pumpQueue());
-			return;
-		}
-		if (this.#inflight.count >= this.#maxInflight) return;
-
-		const batch = [];
-		while (batch.length < this.#batchSize && !this.#queue.isEmpty() && this.#inflight.count + batch.length < this.#maxInflight) {
-			const task = this.#queue.peek();
-			if (task.kind === "stream" && (batch.length > 0 || this.#inflight.count > 0)) break;
-			this.#queue.dequeue();
-			batch.push(task);
-		}
-		if (batch.length === 0) return;
-
-		const now = performance.now();
-
-		const payload = buildBatchPayload(batch);
-		const batchId = this.#nextBatchId++;
-		const useWalBatch = payload.startsWith("BEGIN;");
-
-		// 分配 batchId 和 walBatch 标记（供 P0 stderr 传播使用）
-		for (const task of batch) {
-			task.startTime = now;
-			task.batchId = batchId;
-			task.walBatch = useWalBatch;
-		}
-		this.#inflight.push(...batch);
-		this.#sweeper.schedule();
-		this.#processManager.write(payload);
+		this.#pump();
 	}
 
 	/**
@@ -300,24 +277,13 @@ export class PipelineEngine {
 	 */
 	rejectAll(error) {
 		this.#sharedValueParser.reset();
-
-		const all = this.#inflight.toArray();
-		this.#inflight.clear();
-
-		for (const task of all) {
-			this.#settleTask(task, error, undefined);
-		}
-
-		let queued = this.#queue.dequeue();
-		while (queued) {
-			this.#settleTask(queued, error, undefined);
-			queued = this.#queue.dequeue();
-		}
-
-		for (const task of this.#pendingFinalizeTasks) {
-			this.#settleTask(task, error, undefined);
-		}
-		this.#pendingFinalizeTasks.clear();
+		rejectAllTasks({
+			inflight: this.#inflight,
+			queue: this.#queue,
+			pendingFinalizeTasks: this.#pendingFinalizeTasks,
+			settleTask: (t, e, v) => this.#settleTask(t, e, v),
+			error,
+		});
 	}
 
 	/**

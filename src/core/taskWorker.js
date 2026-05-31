@@ -2,9 +2,8 @@ import { ProcessManager } from "./process.js";
 import { Queue } from "./queue.js";
 import { InflightTracker } from "./inflightTracker.js";
 import { createJsonValueParser, toError } from "./parser.js";
-import { buildBatchPayload } from "./protocol.js";
 import { settleTask } from "./settleUtils.js";
-import { handleParsedValue, createSweeper, createFinalizeScheduler, prepareTaskTimeout } from "./pipelineUtils.js";
+import { handleParsedValue, createSweeper, createFinalizeScheduler, createPumpQueue, rejectAllTasks, prepareTaskTimeout } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
@@ -31,8 +30,8 @@ export class TaskWorker {
 	#sweeper;
 	/** 由 createFinalizeScheduler 创建的闭包，替代 #scheduleFinalizeCheck 方法 */
 	#scheduleFinalizeCheck;
-	/** @type {number} */
-	#nextBatchId = 1;
+	/** 由 createPumpQueue 创建的泵送函数 */
+	#pump;
 
 	/**
 	 * @param {{
@@ -56,6 +55,10 @@ export class TaskWorker {
 		this.#metrics = metrics;
 
 		// 创建共享管道组件
+		// ProcessManager 需在其他管道组件之前创建，因为 createPumpQueue 依赖它
+		this.#processManager = new ProcessManager({ binary, database, initMode });
+		this.#processManager.setOnDrainCallback(() => this.#pumpQueue());
+
 		this.#sweeper = createSweeper({
 			inflight: this.#inflight,
 			sweepIntervalMs: sweepInterval,
@@ -63,6 +66,14 @@ export class TaskWorker {
 				const error = prepareTaskTimeout(task, this.#metrics);
 				if (error) this.#settleTask(task, error, undefined);
 			},
+		});
+		this.#pump = createPumpQueue({
+			queue: this.#pendingQueue,
+			inflight: this.#inflight,
+			processManager: this.#processManager,
+			sweeper: this.#sweeper,
+			batchSize: this.#batchSize,
+			maxInflight: this.#maxInflight,
 		});
 		this.#scheduleFinalizeCheck = createFinalizeScheduler({
 			pendingFinalizeTasks: this.#pendingFinalizeTasks,
@@ -75,7 +86,6 @@ export class TaskWorker {
 				rejectAll: (error) => this.#rejectAll(error),
 			});
 		});
-		this.#processManager = new ProcessManager({ binary, database, initMode, onDrain: () => this.#pumpQueue() });
 		this.#startProcess();
 	}
 
@@ -161,43 +171,10 @@ export class TaskWorker {
 
 	/**
 	 * 从 pendingQueue 中取出最多 batchSize 个任务，合并 payload 后一次性写入 stdin。
-	 * stream 任务必须单独发送（不与其他任务合批），且需要等 inflight 清空后再发送。
+	 * 实际逻辑委托给 this.#pump（由 createPumpQueue 创建）。
 	 */
 	#pumpQueue() {
-		if (this.#processManager.draining) {
-			this.#processManager.onDrained(() => this.#pumpQueue());
-			return;
-		}
-		if (this.#inflight.count >= this.#maxInflight) return;
-
-		const batch = [];
-		while (
-			batch.length < this.#batchSize &&
-			!this.#pendingQueue.isEmpty() &&
-			this.#inflight.count + batch.length < this.#maxInflight
-		) {
-			const task = this.#pendingQueue.peek();
-			if (task.kind === "stream" && (batch.length > 0 || this.#inflight.count > 0)) break;
-			this.#pendingQueue.dequeue();
-			batch.push(task);
-		}
-		if (batch.length === 0) return;
-
-		const now = performance.now();
-
-		const payload = buildBatchPayload(batch);
-		const batchId = this.#nextBatchId++;
-		const useWalBatch = payload.startsWith("BEGIN;");
-
-		// 分配 batchId 和 walBatch 标记（供 P0 stderr 传播使用）
-		for (const task of batch) {
-			task.startTime = now;
-			task.batchId = batchId;
-			task.walBatch = useWalBatch;
-		}
-		this.#inflight.push(...batch);
-		this.#sweeper.schedule();
-		this.#processManager.write(payload);
+		this.#pump();
 	}
 
 	/** sentinel token 命中后的统一处理逻辑。 */
@@ -268,23 +245,12 @@ export class TaskWorker {
 
 	#rejectAll(error) {
 		this.#sweeper.clear();
-
-		const all = this.#inflight.toArray();
-		this.#inflight.clear();
-
-		let queued = this.#pendingQueue.dequeue();
-		while (queued) {
-			this.#settleTask(queued, error, undefined);
-			queued = this.#pendingQueue.dequeue();
-		}
-
-		for (const task of all) {
-			this.#settleTask(task, error, undefined);
-		}
-
-		for (const task of this.#pendingFinalizeTasks) {
-			this.#settleTask(task, error, undefined);
-		}
-		this.#pendingFinalizeTasks.clear();
+		rejectAllTasks({
+			inflight: this.#inflight,
+			queue: this.#pendingQueue,
+			pendingFinalizeTasks: this.#pendingFinalizeTasks,
+			settleTask: (t, e, v) => this.#settleTask(t, e, v),
+			error,
+		});
 	}
 }

@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { finalizePendingTasks, prepareTaskTimeout, handleParsedValue, createSweeper, createFinalizeScheduler } from "./pipelineUtils.js";
+import { finalizePendingTasks, prepareTaskTimeout, handleParsedValue, createSweeper, createFinalizeScheduler, createPumpQueue, rejectAllTasks } from "./pipelineUtils.js";
 import { InflightTracker } from "./inflightTracker.js";
+import { Queue } from "./queue.js";
 
 describe("finalizePendingTasks", () => {
 	test("query 任务调用 settle(null, task.rows)", () => {
@@ -395,5 +396,191 @@ describe("handleParsedValue", () => {
 			rejectAll: () => {},
 		});
 		assert.deepEqual(streamRows, ["a", "b", "c"]);
+	});
+});
+
+// ─── createPumpQueue ───
+
+describe("createPumpQueue", () => {
+	function makeMockProcessManager() {
+		let drainCb = null;
+		return {
+			draining: false,
+			written: /** @type {string[]} */ ([]),
+			write(data) { this.written.push(data); },
+			onDrained(cb) { drainCb = cb; },
+			_triggerDrain() { if (drainCb) drainCb(); },
+		};
+	}
+
+	function makeMockSweeper() {
+		return { scheduleCalls: 0, schedule() { this.scheduleCalls++; }, clear() {} };
+	}
+
+	test("泵送空队列时什么都不做", () => {
+		const queue = new Queue();
+		const inflight = new InflightTracker();
+		const pm = makeMockProcessManager();
+		const sweeper = makeMockSweeper();
+
+		const pump = createPumpQueue({ queue, inflight, processManager: pm, sweeper, batchSize: 10, maxInflight: 50 });
+		pump();
+
+		assert.equal(pm.written.length, 0);
+		assert.equal(sweeper.scheduleCalls, 0);
+	});
+
+	test("泵送单个 execute 任务", () => {
+		const queue = new Queue();
+		const inflight = new InflightTracker();
+		const pm = makeMockProcessManager();
+		const sweeper = makeMockSweeper();
+
+		const task = { kind: "execute", sql: "SELECT 1", token: "tok-1" };
+		queue.enqueue(task);
+
+		const pump = createPumpQueue({ queue, inflight, processManager: pm, sweeper, batchSize: 10, maxInflight: 50 });
+		pump();
+
+		assert.equal(pm.written.length, 1, "应写入一次");
+		assert.ok(pm.written[0].includes("SELECT 1"), "payload 应包含 SQL");
+		assert.equal(sweeper.scheduleCalls, 1, "sweeper 应被调度");
+		assert.equal(inflight.count, 1, "任务应进入 inflight");
+		assert.equal(inflight.first, task);
+		assert.ok(task.startTime > 0, "应在 pump 时标记 startTime");
+		assert.ok(task.batchId != null, "应分配 batchId");
+	});
+
+	test("泵送 batch 多个 execute 任务", () => {
+		const queue = new Queue();
+		const inflight = new InflightTracker();
+		const pm = makeMockProcessManager();
+		const sweeper = makeMockSweeper();
+
+		queue.enqueue({ kind: "execute", sql: "INSERT INTO t VALUES(1)", token: "tok-1" });
+		queue.enqueue({ kind: "execute", sql: "INSERT INTO t VALUES(2)", token: "tok-2" });
+
+		const pump = createPumpQueue({ queue, inflight, processManager: pm, sweeper, batchSize: 10, maxInflight: 50 });
+		pump();
+
+		assert.equal(inflight.count, 2, "两个任务都应进入 inflight");
+		assert.ok(pm.written[0].startsWith("BEGIN;"), "batch 应以 BEGIN 开头");
+	});
+
+	test("stream 任务独占发送", () => {
+		const queue = new Queue();
+		const inflight = new InflightTracker();
+		const pm = makeMockProcessManager();
+		const sweeper = makeMockSweeper();
+
+		queue.enqueue({ kind: "execute", sql: "SELECT 1", token: "tok-1" });
+		queue.enqueue({ kind: "stream", sql: "SELECT 2", token: "tok-2", onRow: null });
+
+		const pump = createPumpQueue({ queue, inflight, processManager: pm, sweeper, batchSize: 10, maxInflight: 50 });
+		pump();
+
+		// stream 碰到前面有 execute → 不打包，只发送 execute
+		assert.equal(inflight.count, 1, "stream 前的 execute 独立发送");
+		assert.equal(inflight.first?.token, "tok-1");
+	});
+
+	test("draining 时不泵送，排空后重试", () => {
+		const queue = new Queue();
+		const inflight = new InflightTracker();
+		const pm = makeMockProcessManager();
+		const sweeper = makeMockSweeper();
+		let postDrainCalls = 0;
+
+		queue.enqueue({ kind: "execute", sql: "SELECT 1", token: "tok-1" });
+
+		pm.draining = true;
+		const pump = createPumpQueue({ queue, inflight, processManager: pm, sweeper, batchSize: 10, maxInflight: 50 });
+		pump();
+
+		assert.equal(pm.written.length, 0, "draining 时应跳过泵送");
+
+		pm.draining = false;
+		pm._triggerDrain(); // 触发 onDrained 回调 → 重新调用 pump
+		assert.equal(pm.written.length, 1, "排空后应完成泵送");
+	});
+
+	test("达到 maxInflight 上限时不泵送", () => {
+		const queue = new Queue();
+		const inflight = new InflightTracker();
+		const pm = makeMockProcessManager();
+		const sweeper = makeMockSweeper();
+
+		queue.enqueue({ kind: "execute", sql: "SELECT 1", token: "tok-1" });
+		// 手动填充 inflight 到上限
+		inflight.push({ kind: "execute", startTime: 0, timeout: 99999 });
+
+		const pump = createPumpQueue({ queue, inflight, processManager: pm, sweeper, batchSize: 10, maxInflight: 1 });
+		pump();
+
+		assert.equal(pm.written.length, 0, "超过 maxInflight 不应泵送");
+	});
+});
+
+// ─── rejectAllTasks ───
+
+describe("rejectAllTasks", () => {
+	function setup() {
+		const inflight = new InflightTracker();
+		const queue = new Queue();
+		const pendingFinalizeTasks = new Set();
+		const settled = /** @type {Array<{ task: object, error: Error|null, value: any }>} */ ([]);
+		const settleTask = (task, error, value) => {
+			task.settled = true;
+			settled.push({ task, error, value });
+		};
+		const error = new Error("test rejection");
+		return { inflight, queue, pendingFinalizeTasks, settled, settleTask, error };
+	}
+
+	test("拒绝 inflight + 队列 + pendingFinalize 中的所有任务", () => {
+		const { inflight, queue, pendingFinalizeTasks, settled, settleTask, error } = setup();
+
+		const t1 = { id: 1 };
+		const t2 = { id: 2 };
+		const t3 = { id: 3 };
+
+		inflight.push(t1);
+		queue.enqueue(t2);
+		pendingFinalizeTasks.add(t3);
+
+		rejectAllTasks({ inflight, queue, pendingFinalizeTasks, settleTask, error });
+
+		assert.equal(settled.length, 3);
+		assert.equal(settled[0].task, t2, "队列任务先被结算");
+		assert.equal(settled[1].task, t1, "inflight 任务其次");
+		assert.equal(settled[2].task, t3, "pendingFinalize 任务最后");
+		assert.equal(inflight.count, 0, "inflight 已清空");
+		assert.equal(queue.isEmpty(), true, "队列已清空");
+		assert.equal(pendingFinalizeTasks.size, 0, "pendingFinalize 已清空");
+	});
+
+	test("空集合不报错", () => {
+		const { inflight, queue, pendingFinalizeTasks, settled, settleTask, error } = setup();
+		rejectAllTasks({ inflight, queue, pendingFinalizeTasks, settleTask, error });
+		assert.equal(settled.length, 0);
+	});
+
+	test("只有 inflight 任务", () => {
+		const { inflight, queue, pendingFinalizeTasks, settled, settleTask, error } = setup();
+		const t = { id: 1 };
+		inflight.push(t);
+		rejectAllTasks({ inflight, queue, pendingFinalizeTasks, settleTask, error });
+		assert.equal(settled.length, 1);
+		assert.equal(settled[0].task, t);
+		assert.ok(settled[0].error, error);
+	});
+
+	test("只有队列任务", () => {
+		const { inflight, queue, pendingFinalizeTasks, settled, settleTask, error } = setup();
+		const t = { id: 1 };
+		queue.enqueue(t);
+		rejectAllTasks({ inflight, queue, pendingFinalizeTasks, settleTask, error });
+		assert.equal(settled.length, 1);
+		assert.equal(settled[0].task, t);
 	});
 });

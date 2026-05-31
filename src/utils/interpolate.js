@@ -19,7 +19,7 @@ import {
 const _interpCache = new LRUCache({ maxSize: 256, maxKeyLength: 4096 });
 
 /**
- * Parse an SQL template into text segments separated by `?` placeholders.
+ * 将 SQL 模板解析为以 `?` 分隔的文本段。
  * @param {string} sql
  * @returns {{ segments: string[], paramCount: number }}
  */
@@ -123,8 +123,8 @@ function _parseTemplate(sql) {
 
 /**
  * 使用预解析的模板替换参数，避免重新扫描 SQL。
- * @param {{ segments: string[], paramCount: number }} template
- * @param {any[]} params
+ * @param {{ segments: string[], paramCount: number }} template - 由 _parseTemplate 返回的模板
+ * @param {any[]} params - 参数数组
  * @returns {string}
  */
 export function interpolateFromTemplate(template, params) {
@@ -143,9 +143,10 @@ export function interpolateFromTemplate(template, params) {
 }
 
 /**
- * 替换 SQL 语句中的 ? 为转义后的参数
- * @param {string} sql
- * @param {any[]} params
+ * 替换 SQL 语句中的 ? 为转义后的参数。
+ * 内部使用 LRU 缓存已解析的模板，避免重复扫描相同 SQL。
+ * @param {string} sql - SQL 模板（含 ? 占位符）
+ * @param {any[]} params - 参数数组
  * @returns {string}
  */
 export function interpolateSQL(sql, params) {

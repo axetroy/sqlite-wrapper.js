@@ -105,3 +105,50 @@ export function handleParsedValue(
 	inflight: InflightTracker,
 	callbacks: ParsedValueCallbacks,
 ): void;
+
+// ─── createPumpQueue ───
+
+export interface PumpQueueOptions {
+	/** 待发送的任务队列 */
+	queue: import("./queue.js").Queue;
+	/** inflight 任务跟踪器 */
+	inflight: InflightTracker;
+	/** 子进程管理器（提供 draining 判断、write 写入、onDrained 注册） */
+	processManager: { draining: boolean; write: (data: string) => void; onDrained: (cb: () => void) => void };
+	/** sweep 定时器管理器 */
+	sweeper: Sweeper;
+	/** 批量发送大小 */
+	batchSize: number;
+	/** inflight 上限 */
+	maxInflight: number;
+}
+
+/**
+ * 创建泵送函数，将队列中的任务批量发送给 sqlite3 进程。
+ * PipelineEngine 和 TaskWorker 共享此工厂，消除 #pumpQueue 方法的重复。
+ *
+ * @returns 泵送函数，调用后尝试从队列取出 batch 发送
+ */
+export function createPumpQueue(options: PumpQueueOptions): () => void;
+
+// ─── rejectAllTasks ───
+
+export interface RejectAllOptions {
+	/** inflight 任务跟踪器 */
+	inflight: InflightTracker;
+	/** 待发送的任务队列 */
+	queue: import("./queue.js").Queue;
+	/** pendingFinalize 任务集合 */
+	pendingFinalizeTasks: Set<object>;
+	/** 结算回调，形式为 (task, error, value) => void */
+	settleTask: (task: object, error: Error | null, value: any) => void;
+	/** 拒绝原因 */
+	error: Error;
+}
+
+/**
+ * 拒绝所有待处理任务（inflight、队列、pendingFinalize）。
+ * 提取自 PipelineEngine.rejectAll 和 TaskWorker.#rejectAll，
+ * 消除二者间的逻辑重复。
+ */
+export function rejectAllTasks(options: RejectAllOptions): void;

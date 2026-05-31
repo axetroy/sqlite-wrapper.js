@@ -3,6 +3,7 @@ export const DEFAULT_STATEMENT_TIMEOUT = 30_000;
 
 /**
  * 创建一个描述 SQL 超时的 Error 对象。
+ * 消息格式：`SQLite statement timed out after {timeout}ms: {sql}`
  * @param {number} timeout - 超时毫秒数
  * @param {string} sql - 超时的 SQL 语句（已标准化）
  * @returns {Error}

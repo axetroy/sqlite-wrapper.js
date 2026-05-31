@@ -114,11 +114,11 @@ export class Queue {
 	}
 
 	/**
-	 * Prepend all items from another Queue in front of this queue's existing items,
-	 * preserving the donor queue's order. The donor queue is emptied in the process.
-	 * This is more efficient than toArray() + clear() + repeated enqueue() because it
-	 * avoids allocating an intermediate array and minimises enqueue call overhead.
-	 * @param {Queue} other
+	 * 将另一个 Queue 中的所有元素插入到当前队列的前面，保持原始顺序。
+	 * 源队列在操作后被清空。
+	 * 比 toArray() + clear() + 多次 enqueue() 更高效，
+	 * 因为避免了中间数组分配并减少 enqueue 调用开销。
+	 * @param {Queue} other - 源队列（操作后被清空）
 	 */
 	prependAll(other) {
 		if (other.isEmpty()) return;

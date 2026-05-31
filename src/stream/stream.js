@@ -13,13 +13,13 @@ export { createRowStreamParser };
  *
  * sqlite3 `-json` 模式下空结果集不输出 `[]`，
  * 此时行解析器可能错误地消费 sentinel 数组（而非数据数组）。
- * 回调中检测 sentinel 行并回喂给 valueParser 以确保 sentinel 被识别。
+ * 回调中检测 sentinel 行并回喂给 sharedValueParser 以确保 sentinel 被识别。
  *
  * @param {{ kind: string, onRow?: Function, consumerError?: Error | null, token?: string }} task
- * @param {{ feed: Function }} valueParser - 共享 JSON 值解析器，用于回喂 sentinel 行
+ * @param {{ feed: (raw: string) => void }} pipelineOrFeed - 共享 JSON 值解析器的 feed 方法，用于回喂 sentinel 行
  * @returns {ReturnType<typeof createRowStreamParser> | null}
  */
-export function setupStreamParser(task, valueParser = { feed() {} }) {
+export function setupStreamParser(task, pipelineOrFeed = { feed() {} }) {
 	if (task.kind !== "stream") return null;
 	const parser = createRowStreamParser((rawRow) => {
 		if (task.consumerError) return;
@@ -28,7 +28,7 @@ export function setupStreamParser(task, valueParser = { feed() {} }) {
 			// sqlite3 空结果不输出 []，导致 sentinel 被行解析器消费。
 			// 若该行包含 TOKEN_COLUMN，回喂给 valueParser 做正式 sentinel 检测。
 			if (typeof row === "object" && row !== null && TOKEN_COLUMN in row) {
-				valueParser.feed(`[${rawRow}]`);
+				pipelineOrFeed.feed(`[${rawRow}]`);
 				return;
 			}
 			task.onRow(row);

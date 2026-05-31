@@ -1,6 +1,9 @@
 /**
- * 转义 SQLite 参数
- * @param {any} value
+ * 转义 SQLite 参数值为安全字符串。
+ * 字符串中的单引号会被双写（''）转义；
+ * null/undefined 转 "NULL"；boolean 转 "TRUE"/"FALSE"；
+ * Date 转 ISO 字符串带引号；数字/bigint 直转字符串。
+ * @param {any} value - 要转义的值
  * @returns {string}
  */
 export function escapeValue(value) {
