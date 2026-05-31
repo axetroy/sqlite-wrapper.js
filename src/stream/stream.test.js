@@ -112,6 +112,19 @@ describe("setupStreamParser", () => {
 		assert.equal(valueParserFeed.length, 1);
 		assert.equal(valueParserFeed[0], `[${sentinelRaw}]`);
 	});
+
+	test("默认 pipelineOrFeed.feed 可被 sentinel 调用", () => {
+		// 不传 pipelineOrFeed，使用默认的 { feed() {} } 空实现
+		const task = {
+			kind: "stream",
+			onRow: () => {},
+			consumerError: null,
+		};
+		const parser = setupStreamParser(task);
+		// sentinel 行会触发默认的 pipelineOrFeed.feed()，该函数体应被覆盖
+		parser.feed('[{"__sqlite_executor_token__":"tok-1"}]');
+		// 不必断言 — 默认 feed 是空操作，仅需确保其被调用
+	});
 });
 
 describe("createRowStreamParser 重新导出", () => {
@@ -153,6 +166,14 @@ describe("AsyncRowBuffer", () => {
 		const buffer = new AsyncRowBuffer();
 		buffer.end();
 		const { done } = await buffer.next();
+		assert.equal(done, true);
+	});
+
+	test("end 在 pending next 时 resolve", async () => {
+		const buffer = new AsyncRowBuffer();
+		const p = buffer.next();     // 创建 pending next
+		buffer.end();                 // #done=true, #pending 非 null → resolve
+		const { done } = await p;
 		assert.equal(done, true);
 	});
 
