@@ -1,9 +1,10 @@
 import { Queue } from "./queue.js";
+import { InflightTracker } from "./inflightTracker.js";
 import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { finalizePendingTasks, prepareTaskTimeout } from "./pipelineUtils.js";
-import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT, INFLIGHT_COMPACT_THRESHOLD } from "../constants.js";
+import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
  * 管线化执行引擎。
@@ -16,8 +17,7 @@ import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT, INFLIGHT_COMPACT_THRESHOLD } 
  */
 export class PipelineEngine {
 	#queue = new Queue();
-	#inflightTasks = [];
-	#inflightHead = 0;
+	#inflight = new InflightTracker();
 	#pendingFinalizeTasks = new Set();
 	#scheduledFinalize = false;
 	#sharedValueParser;
@@ -85,7 +85,7 @@ export class PipelineEngine {
 
 	/** 当前待处理的任务总数（队列中 + 执行中 + pendingFinalize）。 */
 	get pendingStatements() {
-		return this.#queue.size + (this.#inflightTasks.length - this.#inflightHead) + this.#pendingFinalizeTasks.size;
+		return this.#queue.size + this.#inflight.count + this.#pendingFinalizeTasks.size;
 	}
 
 	/**
@@ -118,28 +118,6 @@ export class PipelineEngine {
 		this.#pumpQueue();
 	}
 
-	#inflightCount() {
-		return this.#inflightTasks.length - this.#inflightHead;
-	}
-
-	#firstInflight() {
-		return this.#inflightHead < this.#inflightTasks.length ? this.#inflightTasks[this.#inflightHead] : null;
-	}
-
-	#shiftInflight() {
-		const task = this.#inflightTasks[this.#inflightHead];
-		this.#inflightTasks[this.#inflightHead] = null;
-		this.#inflightHead++;
-		if (this.#inflightHead >= this.#inflightTasks.length) {
-			this.#inflightTasks = [];
-			this.#inflightHead = 0;
-		} else if (this.#inflightHead > INFLIGHT_COMPACT_THRESHOLD) {
-			this.#inflightTasks = this.#inflightTasks.slice(this.#inflightHead);
-			this.#inflightHead = 0;
-		}
-		return task;
-	}
-
 	/**
 	 * 从队列批量取出任务发送给 sqlite3 进程。
 	 * 非 stream 任务最多批量发送 DEFAULT_BATCH_SIZE 个；
@@ -151,12 +129,12 @@ export class PipelineEngine {
 			this.#processManager.onDrained(() => this.#pumpQueue());
 			return;
 		}
-		if (this.#inflightCount() >= this.#maxInflight) return;
+		if (this.#inflight.count >= this.#maxInflight) return;
 
 		const batch = [];
-		while (batch.length < this.#batchSize && !this.#queue.isEmpty() && this.#inflightCount() + batch.length < this.#maxInflight) {
+		while (batch.length < this.#batchSize && !this.#queue.isEmpty() && this.#inflight.count + batch.length < this.#maxInflight) {
 			const task = this.#queue.peek();
-			if (task.kind === "stream" && (batch.length > 0 || this.#inflightCount() > 0)) break;
+			if (task.kind === "stream" && (batch.length > 0 || this.#inflight.count > 0)) break;
 			this.#queue.dequeue();
 			batch.push(task);
 		}
@@ -174,7 +152,7 @@ export class PipelineEngine {
 			task.batchId = batchId;
 			task.walBatch = useWalBatch;
 		}
-		this.#inflightTasks.push(...batch);
+		this.#inflight.push(...batch);
 		this.#scheduleSweep();
 		this.#processManager.write(payload);
 	}
@@ -185,7 +163,7 @@ export class PipelineEngine {
 	 * @param {string} chunk
 	 */
 	handleStdoutChunk(chunk) {
-		const task = this.#firstInflight();
+		const task = this.#inflight.first;
 		if (!task) return;
 
 		// 已超时的 stream 任务：禁止继续喂给 rowParser（rowParser.reset 后 finished=false，
@@ -207,31 +185,13 @@ export class PipelineEngine {
 	 * @param {string} raw
 	 */
 	#handleParsedValue(raw) {
-		const task = this.#firstInflight();
+		const task = this.#inflight.first;
 		if (!task) return;
 
 		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
 		if (isSentinelRaw(raw, task.token)) {
-			this.#shiftInflight();
-
-			if (task.timedout) {
-				this.#pumpQueue();
-				return;
-			}
-
-			// 无论 stderrText 是否为空，都走 pendingFinalize 延迟结算。
-			// 原因：Windows 上 sqlite3 的 stderr 输出可能被 OS pipe 拆分为多个 chunk，
-			// 若在此处立即 reject，后续到达的 stderr chunk 会丢失或被错误地配给下一个 inflight 任务。
-			// 通过 pendingFinalize + setImmediate 给 stderr chunk 留足时间到达。
-			if (task.consumerError) {
-				this.#settleTask(task, task.consumerError, undefined);
-				this.#pumpQueue();
-				return;
-			}
-
-			this.#pendingFinalizeTasks.add(task);
-			this.#scheduleFinalizeCheck();
-			this.#pumpQueue();
+			this.#inflight.shift();
+			this.#afterSentinel(task);
 			return;
 		}
 
@@ -247,28 +207,12 @@ export class PipelineEngine {
 		}
 
 		if (isSentinelRow(parsed, task.token)) {
-			this.#shiftInflight();
-
-			if (task.timedout) {
-				this.#pumpQueue();
-				return;
-			}
-
-			if (task.consumerError) {
-				this.#settleTask(task, task.consumerError, undefined);
-				this.#pumpQueue();
-				return;
-			}
-
-			this.#pendingFinalizeTasks.add(task);
-			this.#scheduleFinalizeCheck();
-			this.#pumpQueue();
+			this.#inflight.shift();
+			this.#afterSentinel(task);
 			return;
 		}
 
-		if (task.timedout) {
-			return;
-		}
+		if (task.timedout) return;
 
 		if (task.kind === "query") {
 			collectQueryRows(task, parsed);
@@ -278,6 +222,31 @@ export class PipelineEngine {
 		if (task.kind === "stream") {
 			processStreamRows(task, parsed);
 		}
+	}
+
+	/**
+	 * sentinel token 命中后的统一处理逻辑。
+	 * 将任务放入 pendingFinalize，延迟一帧结算以等待可能的 stderr。
+	 */
+	#afterSentinel(task) {
+		if (task.timedout) {
+			this.#pumpQueue();
+			return;
+		}
+
+		// 无论 stderrText 是否为空，都走 pendingFinalize 延迟结算。
+		// 原因：Windows 上 sqlite3 的 stderr 输出可能被 OS pipe 拆分为多个 chunk，
+		// 若在此处立即 reject，后续到达的 stderr chunk 会丢失或被错误地配给下一个 inflight 任务。
+		// 通过 pendingFinalize + setImmediate 给 stderr chunk 留足时间到达。
+		if (task.consumerError) {
+			this.#settleTask(task, task.consumerError, undefined);
+			this.#pumpQueue();
+			return;
+		}
+
+		this.#pendingFinalizeTasks.add(task);
+		this.#scheduleFinalizeCheck();
+		this.#pumpQueue();
 	}
 
 	/**
@@ -298,7 +267,7 @@ export class PipelineEngine {
 	 */
 	handleStderrChunk(chunk) {
 		const firstPending = this.#pendingFinalizeTasks.values().next().value;
-		const inflight = this.#firstInflight();
+		const inflight = this.#inflight.first;
 		const task = firstPending ?? inflight;
 
 		if (!task) {
@@ -326,10 +295,9 @@ export class PipelineEngine {
 			for (const t of this.#pendingFinalizeTasks) {
 				if (t !== task) t.stderrText += chunk;
 			}
-			for (let i = this.#inflightHead; i < this.#inflightTasks.length; i++) {
-				const t = this.#inflightTasks[i];
-				if (t && t !== task) t.stderrText += chunk;
-			}
+			this.#inflight.forEach((t) => {
+				if (t !== task) t.stderrText += chunk;
+			});
 			return;
 		}
 
@@ -365,16 +333,13 @@ export class PipelineEngine {
 		if (this.#sweepTimer) return;
 		this.#sweepTimer = setTimeout(() => {
 			this.#sweepTimer = null;
-			const tasks = this.#inflightTasks;
-			const head = this.#inflightHead;
 			const now = performance.now();
-			for (let i = head; i < tasks.length; i++) {
-				const task = tasks[i];
+			this.#inflight.forEach((task) => {
 				if (now - task.startTime > task.timeout) {
 					this.#handleTaskTimeout(task);
 				}
-			}
-			if (this.#inflightCount() > 0) {
+			});
+			if (this.#inflight.count > 0) {
 				this.#scheduleSweep();
 			}
 		}, this.#sweepIntervalMs).unref();
@@ -400,10 +365,8 @@ export class PipelineEngine {
 	rejectAll(error) {
 		this.#sharedValueParser.reset();
 
-		const activeCount = this.#inflightTasks.length - this.#inflightHead;
-		const all = activeCount > 0 ? this.#inflightTasks.slice(this.#inflightHead) : [];
-		this.#inflightTasks = [];
-		this.#inflightHead = 0;
+		const all = this.#inflight.toArray();
+		this.#inflight.clear();
 
 		for (const task of all) {
 			this.#settleTask(task, error, undefined);

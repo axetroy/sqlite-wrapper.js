@@ -1,10 +1,11 @@
 import { ProcessManager } from "./process.js";
 import { Queue } from "./queue.js";
+import { InflightTracker } from "./inflightTracker.js";
 import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { finalizePendingTasks, prepareTaskTimeout } from "./pipelineUtils.js";
-import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT, INFLIGHT_COMPACT_THRESHOLD } from "../constants.js";
+import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
  * 单个 sqlite3 进程的任务执行器。
@@ -18,8 +19,7 @@ import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT, INFLIGHT_COMPACT_THRESHOLD } 
 export class TaskWorker {
 	#processManager;
 	#pendingQueue = new Queue();
-	#inflightTasks = [];
-	#inflightHead = 0;
+	#inflight = new InflightTracker();
 	#pendingFinalizeTasks = new Set();
 	#scheduledFinalize = false;
 	#valueParser;
@@ -65,11 +65,11 @@ export class TaskWorker {
 	}
 
 	get idle() {
-		return this.#inflightTasks.length === this.#inflightHead && this.#pendingQueue.isEmpty() && this.#pendingFinalizeTasks.size === 0;
+		return this.#inflight.count === 0 && this.#pendingQueue.isEmpty() && this.#pendingFinalizeTasks.size === 0;
 	}
 
 	get pendingStatements() {
-		return this.#pendingQueue.size + (this.#inflightTasks.length - this.#inflightHead) + this.#pendingFinalizeTasks.size;
+		return this.#pendingQueue.size + this.#inflight.count + this.#pendingFinalizeTasks.size;
 	}
 
 	/**
@@ -141,28 +141,6 @@ export class TaskWorker {
 		});
 	}
 
-	#inflightCount() {
-		return this.#inflightTasks.length - this.#inflightHead;
-	}
-
-	#firstInflight() {
-		return this.#inflightHead < this.#inflightTasks.length ? this.#inflightTasks[this.#inflightHead] : null;
-	}
-
-	#shiftInflight() {
-		const task = this.#inflightTasks[this.#inflightHead];
-		this.#inflightTasks[this.#inflightHead] = null;
-		this.#inflightHead++;
-		if (this.#inflightHead >= this.#inflightTasks.length) {
-			this.#inflightTasks = [];
-			this.#inflightHead = 0;
-		} else if (this.#inflightHead > INFLIGHT_COMPACT_THRESHOLD) {
-			this.#inflightTasks = this.#inflightTasks.slice(this.#inflightHead);
-			this.#inflightHead = 0;
-		}
-		return task;
-	}
-
 	/**
 	 * 从 pendingQueue 中取出最多 batchSize 个任务，合并 payload 后一次性写入 stdin。
 	 * stream 任务必须单独发送（不与其他任务合批），且需要等 inflight 清空后再发送。
@@ -172,16 +150,16 @@ export class TaskWorker {
 			this.#processManager.onDrained(() => this.#pumpQueue());
 			return;
 		}
-		if (this.#inflightCount() >= this.#maxInflight) return;
+		if (this.#inflight.count >= this.#maxInflight) return;
 
 		const batch = [];
 		while (
 			batch.length < this.#batchSize &&
 			!this.#pendingQueue.isEmpty() &&
-			this.#inflightCount() + batch.length < this.#maxInflight
+			this.#inflight.count + batch.length < this.#maxInflight
 		) {
 			const task = this.#pendingQueue.peek();
-			if (task.kind === "stream" && (batch.length > 0 || this.#inflightCount() > 0)) break;
+			if (task.kind === "stream" && (batch.length > 0 || this.#inflight.count > 0)) break;
 			this.#pendingQueue.dequeue();
 			batch.push(task);
 		}
@@ -199,7 +177,7 @@ export class TaskWorker {
 			task.batchId = batchId;
 			task.walBatch = useWalBatch;
 		}
-		this.#inflightTasks.push(...batch);
+		this.#inflight.push(...batch);
 		this.#scheduleSweep();
 		this.#processManager.write(payload);
 	}
@@ -209,36 +187,13 @@ export class TaskWorker {
 	 * 按 FIFO 顺序匹配 inflightTasks[0] 的 sentinel token。
 	 */
 	#handleParsedValue(raw) {
-		const task = this.#firstInflight();
+		const task = this.#inflight.first;
 		if (!task) return;
 
 		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
 		if (isSentinelRaw(raw, task.token)) {
-			this.#shiftInflight();
-
-			if (task.timedout) {
-				this.#pumpQueue();
-				return;
-			}
-
-			if (task.stderrText) {
-				this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-				this.#pumpQueue();
-				return;
-			}
-
-			if (task.consumerError) {
-				this.#settleTask(task, task.consumerError, undefined);
-				this.#pumpQueue();
-				return;
-			}
-
-			// stderr 和 stdout 是独立的 OS 管道，data 事件触发顺序无法保证。
-			// 延迟一帧再 finalize，给 stderr 一个事件循环周期的时间到达。
-			// 多个 task 共享同一个 setImmediate，减少事件循环开销。
-			this.#pendingFinalizeTasks.add(task);
-			this.#scheduleFinalizeCheck();
-			this.#pumpQueue();
+			this.#inflight.shift();
+			this.#afterSentinel(task);
 			return;
 		}
 
@@ -254,28 +209,8 @@ export class TaskWorker {
 		}
 
 		if (isSentinelRow(parsed, task.token)) {
-			this.#shiftInflight();
-
-			if (task.timedout) {
-				this.#pumpQueue();
-				return;
-			}
-
-			if (task.stderrText) {
-				this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
-				this.#pumpQueue();
-				return;
-			}
-
-			if (task.consumerError) {
-				this.#settleTask(task, task.consumerError, undefined);
-				this.#pumpQueue();
-				return;
-			}
-
-			this.#pendingFinalizeTasks.add(task);
-			this.#scheduleFinalizeCheck();
-			this.#pumpQueue();
+			this.#inflight.shift();
+			this.#afterSentinel(task);
 			return;
 		}
 
@@ -289,6 +224,33 @@ export class TaskWorker {
 		if (task.kind === "stream") {
 			processStreamRows(task, parsed);
 		}
+	}
+
+	/** sentinel token 命中后的统一处理逻辑（与 PipelineEngine.#afterSentinel 结构一致）。 */
+	#afterSentinel(task) {
+		if (task.timedout) {
+			this.#pumpQueue();
+			return;
+		}
+
+		if (task.stderrText) {
+			this.#settleTask(task, new Error(task.stderrText.trim()), undefined);
+			this.#pumpQueue();
+			return;
+		}
+
+		if (task.consumerError) {
+			this.#settleTask(task, task.consumerError, undefined);
+			this.#pumpQueue();
+			return;
+		}
+
+		// stderr 和 stdout 是独立的 OS 管道，data 事件触发顺序无法保证。
+		// 延迟一帧再 finalize，给 stderr 一个事件循环周期的时间到达。
+		// 多个 task 共享同一个 setImmediate，减少事件循环开销。
+		this.#pendingFinalizeTasks.add(task);
+		this.#scheduleFinalizeCheck();
+		this.#pumpQueue();
 	}
 
 	/**
@@ -305,7 +267,7 @@ export class TaskWorker {
 
 	#handleStderrChunk(chunk) {
 		const firstPending = this.#pendingFinalizeTasks.values().next().value;
-		const inflight = this.#firstInflight();
+		const inflight = this.#inflight.first;
 		const task = firstPending ?? inflight;
 
 		if (!task) {
@@ -330,16 +292,11 @@ export class TaskWorker {
 		task.stderrText += chunk;
 		if (task.batchId != null) {
 			for (const t of this.#pendingFinalizeTasks) {
-				if (t !== task) {
-					t.stderrText += chunk;
-				}
+				if (t !== task) t.stderrText += chunk;
 			}
-			for (let i = this.#inflightHead; i < this.#inflightTasks.length; i++) {
-				const t = this.#inflightTasks[i];
-				if (t && t !== task) {
-					t.stderrText += chunk;
-				}
-			}
+			this.#inflight.forEach((t) => {
+				if (t !== task) t.stderrText += chunk;
+			});
 		}
 	}
 
@@ -347,16 +304,13 @@ export class TaskWorker {
 		if (this.#sweepTimer) return;
 		this.#sweepTimer = setTimeout(() => {
 			this.#sweepTimer = null;
-			const tasks = this.#inflightTasks;
-			const head = this.#inflightHead;
 			const now = performance.now();
-			for (let i = head; i < tasks.length; i++) {
-				const task = tasks[i];
+			this.#inflight.forEach((task) => {
 				if (now - task.startTime > task.timeout) {
 					this.#handleTaskTimeout(task);
 				}
-			}
-			if (this.#inflightCount() > 0) {
+			});
+			if (this.#inflight.count > 0) {
 				this.#scheduleSweep();
 			}
 		}, this.#sweepIntervalMs).unref();
@@ -375,10 +329,8 @@ export class TaskWorker {
 		clearTimeout(this.#sweepTimer);
 		this.#sweepTimer = null;
 
-		const activeCount = this.#inflightTasks.length - this.#inflightHead;
-		const all = activeCount > 0 ? this.#inflightTasks.slice(this.#inflightHead) : [];
-		this.#inflightTasks = [];
-		this.#inflightHead = 0;
+		const all = this.#inflight.toArray();
+		this.#inflight.clear();
 
 		let queued = this.#pendingQueue.dequeue();
 		while (queued) {
