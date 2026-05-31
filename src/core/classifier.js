@@ -12,7 +12,6 @@ const _classifyCache = new LRUCache({ maxSize: 256, maxKeyLength: 4096 });
 
 function classifySingle(stmt) {
 	const trimmed = stmt.trim();
-	if (trimmed.length === 0) return "write";
 	// 使用 indexOf 替代 split(/\s+/) 避免数组分配
 	const firstSpace = trimmed.indexOf(" ");
 	const kind = (firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace)).toUpperCase();
