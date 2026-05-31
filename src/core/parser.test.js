@@ -406,6 +406,32 @@ describe("createRowStreamParser", () => {
 		assert.equal(rows[count - 1], '{"a":0}');
 	});
 
+	test("末尾不完整元素（无 elementEnd）触发 end-of-feed 裁剪 elementEnd 空分支", () => {
+		// elementStart !== -1, elementEnd === -1, consumed > 0
+		// 覆盖 parser.js 第 400 行 elementEnd===-1 跳过 `-= consumed` 的 falsy 分支
+		const rows = [];
+		const parser = createRowStreamParser((raw) => rows.push(raw));
+		parser.feed('[{"a":1},{"x"');
+		assert.equal(rows.length, 1, "第一个完整元素应被解析");
+		assert.equal(rows[0], '{"a":1}');
+		// 不完整元素状态校验
+		assert.equal(parser.elementStart, 0, "elementStart 应已调整至 buffer 起始");
+		assert.equal(parser.elementEnd, -1, "elementEnd 应为 -1（未找到结束）");
+	});
+
+	test("末尾不完整元素（有 elementEnd）触发 end-of-feed 裁剪 elementEnd 非空分支", () => {
+		// elementStart !== -1, elementEnd !== -1, consumed > 0
+		// 覆盖 parser.js 第 400 行 elementEnd!==-1 执行 `-= consumed` 的 truthy 分支
+		const rows = [];
+		const parser = createRowStreamParser((raw) => rows.push(raw));
+		parser.feed('[{"a":1},{"x":1}');
+		assert.equal(rows.length, 1, "第一个完整元素应被解析");
+		assert.equal(rows[0], '{"a":1}');
+		// 不完整元素状态校验：elementEnd 已找到，但被 look-ahead 截留
+		assert.equal(parser.elementStart, 0, "elementStart 应已调整至 buffer 起始");
+		assert.ok(parser.elementEnd > 0, "elementEnd 应有正值（已找到结束）");
+	});
+
 	test("fuzz：createRowStreamParser 随机数据不崩溃", () => {
 		const rows = [];
 		const parser = createRowStreamParser((raw) => rows.push(raw));
