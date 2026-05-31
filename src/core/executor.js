@@ -218,10 +218,19 @@ export class SQLiteExecutor {
 		} catch {}
 	}
 
+	/**
+	 * Explicit Resource Management（Stage 3 TC39）：await using。
+	 * 委托给 close()，使得执行器可通过 `await using db = new SQLiteExecutor()` 使用。
+	 * @returns {Promise<void>}
+	 */
 	[Symbol.asyncDispose]() {
 		return this.close();
 	}
 
+	/**
+	 * Explicit Resource Management（Stage 3 TC39）：using。
+	 * 同步销毁场景下的 fire-and-forget 关闭。
+	 */
 	[Symbol.dispose]() {
 		void this.close();
 	}

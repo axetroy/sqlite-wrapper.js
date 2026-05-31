@@ -39,12 +39,14 @@ export class LRUCache {
 
 	/**
 	 * 设置缓存值。达到容量上限时淘汰最旧条目。超长 key 不缓存。
+	 * 对字符串/数组类型检查 maxValueLength；其他类型不做长度过滤。
 	 * @param {string} key
 	 * @param {T} value
 	 */
 	set(key, value) {
 		if (typeof key !== "string" || key.length > this.#maxKeyLength) return;
-		if (value && value.length > this.#maxValueLength) return;
+		if (typeof value === "string" && value.length > this.#maxValueLength) return;
+		if (Array.isArray(value) && value.length > this.#maxValueLength) return;
 		if (this.#map.size >= this.#maxSize) {
 			const firstKey = this.#map.keys().next().value;
 			this.#map.delete(firstKey);

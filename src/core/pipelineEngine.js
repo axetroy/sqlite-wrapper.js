@@ -3,7 +3,7 @@ import { createJsonValueParser, toError } from "./parser.js";
 import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
 import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
 import { finalizePendingTasks, prepareTaskTimeout } from "./pipelineUtils.js";
-import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
+import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT, INFLIGHT_COMPACT_THRESHOLD } from "../constants.js";
 
 /**
  * 管线化执行引擎。
@@ -133,7 +133,7 @@ export class PipelineEngine {
 		if (this.#inflightHead >= this.#inflightTasks.length) {
 			this.#inflightTasks = [];
 			this.#inflightHead = 0;
-		} else if (this.#inflightHead > 128) {
+		} else if (this.#inflightHead > INFLIGHT_COMPACT_THRESHOLD) {
 			this.#inflightTasks = this.#inflightTasks.slice(this.#inflightHead);
 			this.#inflightHead = 0;
 		}

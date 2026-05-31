@@ -192,7 +192,7 @@ export class ProcessManager {
 
 		const timer = setTimeout(() => {
 			proc.kill();
-		}, GRACEFUL_SHUTDOWN_TIMEOUT);
+		}, GRACEFUL_SHUTDOWN_TIMEOUT).unref();
 
 		try {
 			proc.stdin?.write(".quit\n");

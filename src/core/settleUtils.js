@@ -7,7 +7,7 @@ import { toError } from "./parser.js";
  */
 export function collectQueryRows(task, parsed) {
 	if (Array.isArray(parsed)) {
-		if (!task.rows) task.rows = [];
+		// task.rows 在 query 任务中始终初始化为 []（见 executor.js / taskWorker.js）
 		for (let i = 0; i < parsed.length; i++) {
 			task.rows.push(parsed[i]);
 		}

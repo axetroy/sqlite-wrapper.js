@@ -9,3 +9,10 @@ export const DEFAULT_BATCH_SIZE = 10;
  * （Windows 管道 buffer 仅 4KB，Unix 为 64KB）。
  */
 export const DEFAULT_MAX_INFLIGHT = 50;
+
+/**
+ * Inflight 任务数组压缩阈值。
+ * 当 #shiftInflight() 中 #inflightHead 超过此值时，
+ * 通过 slice() 压缩 inflightTasks 数组以回收已被消费的前部 null 条目所占内存。
+ */
+export const INFLIGHT_COMPACT_THRESHOLD = 128;

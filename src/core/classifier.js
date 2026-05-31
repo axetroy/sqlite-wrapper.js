@@ -2,14 +2,20 @@ import { LRUCache } from "./lruCache.js";
 
 const READ_ONLY_KINDS = new Set(["SELECT", "WITH", "VALUES", "EXPLAIN"]);
 
-// LRU cache for classifySQL: keyed by normalized SQL template (before interpolation),
-// so repeated queries with different params hit the cache.
+/**
+ * classifySQL 的 LRU 缓存。
+ * 以规范化后的 SQL 模板为 key（参数插值前），
+ * 使得相同形状的查询即使参数不同也能命中缓存。
+ * @type {LRUCache<"read" | "write">}
+ */
 const _classifyCache = new LRUCache({ maxSize: 256, maxKeyLength: 4096 });
 
 function classifySingle(stmt) {
 	const trimmed = stmt.trim();
 	if (trimmed.length === 0) return "write";
-	const kind = trimmed.split(/\s+/)[0].toUpperCase();
+	// 使用 indexOf 替代 split(/\s+/) 避免数组分配
+	const firstSpace = trimmed.indexOf(" ");
+	const kind = (firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace)).toUpperCase();
 	return READ_ONLY_KINDS.has(kind) ? "read" : "write";
 }
 
