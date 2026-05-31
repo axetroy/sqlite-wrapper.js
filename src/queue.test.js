@@ -84,6 +84,23 @@ describe("Queue", () => {
 		assert.deepEqual(queue.toArray(), expected);
 	});
 
+	test("grow 在 wrap-around 后正确复制元素", () => {
+		// 初始 16 slots，塞满后触发第一次 grow（head=0 的简单扩展）
+		const queue = new Queue();
+		for (let i = 0; i < 16; i++) queue.enqueue(i);
+		// dequeue 8 个 → head=8
+		for (let i = 0; i < 8; i++) assert.equal(queue.dequeue(), i);
+		// 再塞 24 个填满 32 slots（从 tail=16 开始，到 31 后 wrap 到 0~7）
+		for (let i = 16; i < 40; i++) queue.enqueue(i);
+		// 再塞 1 个 → head=8 时触发第二次 grow，进入 else 分支
+		queue.enqueue(40);
+
+		const expected = [];
+		for (let i = 8; i < 41; i++) expected.push(i);
+		assert.deepEqual(queue.toArray(), expected);
+		assert.equal(queue.size, 33);
+	});
+
 	test("remove 删除中间元素", () => {
 		const queue = new Queue();
 		queue.enqueue(1);
@@ -180,5 +197,27 @@ describe("Queue", () => {
 		assert.equal(queue.dequeue(), null);
 		queue.enqueue(3);
 		assert.equal(queue.dequeue(), 3);
+	});
+
+	test("clear 大队列触发内部数组收缩", () => {
+		// 写入 257 项使内部数组扩容到 512（16→32→64→128→256→512）
+		const queue = new Queue();
+		for (let i = 0; i < 257; i++) {
+			queue.enqueue(i);
+		}
+		assert.equal(queue.size, 257);
+
+		// clear 触发 #shrinkIfNeeded：items.length(512) >= SHRINK_THRESHOLD(256)
+		queue.clear();
+		assert.equal(queue.size, 0);
+
+		// 收缩后仍能正常使用
+		for (let i = 0; i < 100; i++) {
+			queue.enqueue(i);
+		}
+		assert.equal(queue.size, 100);
+		for (let i = 0; i < 100; i++) {
+			assert.equal(queue.dequeue(), i);
+		}
 	});
 });

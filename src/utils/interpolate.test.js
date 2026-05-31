@@ -40,6 +40,16 @@ describe("interpolateSQL", () => {
 	test("含 ? 但传空数组报错", () => {
 		assert.throws(() => interpolateSQL("SELECT ?", []), /Too few parameters provided/);
 	});
+
+	test("转义单引号 '' 在字符串内不作为结束标记", () => {
+		const sql = interpolateSQL("SELECT 'it''s ? ok' AS msg, ? AS val", [42]);
+		assert.equal(sql, "SELECT 'it''s ? ok' AS msg, 42 AS val");
+	});
+
+	test("转义双引号 \"\" 在标识符内不作为结束标记", () => {
+		const sql = interpolateSQL('SELECT "my""col" AS "alias""x", ? AS v', [99]);
+		assert.equal(sql, 'SELECT "my""col" AS "alias""x", 99 AS v');
+	});
 });
 
 describe("interpolateFromTemplate", () => {

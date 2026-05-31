@@ -106,4 +106,20 @@ describe("LRUCache", () => {
 		assert.equal(c.get("a"), undefined);
 		assert.equal(c.get("b"), "2");
 	});
+
+	test("超长的数组 value 不缓存", () => {
+		const c = new LRUCache({ maxValueLength: 3 });
+		c.set("arr", [1, 2, 3, 4]); // 长度为 4 > 3
+		assert.equal(c.get("arr"), undefined);
+
+		c.set("arr2", [1, 2, 3]); // 长度为 3 == 3，应缓存
+		assert.deepEqual(c.get("arr2"), [1, 2, 3]);
+	});
+
+	test("非数组对象的 value 即使超过 maxValueLength 也缓存", () => {
+		const c = new LRUCache({ maxValueLength: 5 });
+		const obj = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6 };
+		c.set("obj", obj);
+		assert.equal(c.get("obj"), obj);
+	});
 });

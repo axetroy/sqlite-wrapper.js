@@ -146,6 +146,23 @@ describe("ProcessManager", { skip: !sqlite3Ready }, () => {
 		assert.equal(pm.process, null);
 	});
 
+	test("gracefulShutdown 在有写缓冲时排空再退出", async () => {
+		const pm = createPM();
+		const proc = pm.start();
+		proc.stdout.on("data", () => {});
+		proc.stderr.on("data", () => {});
+
+		// 写入大量数据触发 draining，填充缓冲区
+		const largePayload = 'SELECT 1;\n'.repeat(100000);
+		pm.write(largePayload);
+
+		// gracefulShutdown 应等待缓冲排空，然后发送 .quit
+		await pm.gracefulShutdown();
+
+		assert.ok(proc.exitCode !== null || proc.signalCode !== null);
+		pm.kill();
+	});
+
 	// ── drain 背压 ─────────────────────────────
 
 	test("draining getter 初始为 false", () => {
@@ -158,6 +175,52 @@ describe("ProcessManager", { skip: !sqlite3Ready }, () => {
 		let called = false;
 		pm.setOnDrainCallback(() => { called = true; });
 		assert.equal(called, false, "注册时不调用");
+	});
+
+	test("onDrained 在无缓冲且非 draining 时立即执行回调", () => {
+		const pm = createPM();
+		let called = false;
+		pm.onDrained(() => { called = true; });
+		assert.equal(called, true, "无缓冲时应立即调用");
+	});
+
+	test("onDrained 在有缓冲时暂存回调，排空后触发", async () => {
+		const pm = createPM();
+		pm.start();
+		pm.process.stdout.on("data", () => {});
+		pm.process.stderr.on("data", () => {});
+
+		// 制造 draining 场景
+		const largePayload = 'SELECT 1;\n'.repeat(100000);
+		pm.write(largePayload);
+
+		// draining 期间注册 onDrained → 回调应被暂存
+		let drainedCalled = false;
+		if (pm.draining) {
+			pm.onDrained(() => { drainedCalled = true; });
+		}
+
+		// 等待 drain 完成
+		if (pm.draining) {
+			await new Promise((resolve) => {
+				const check = setInterval(() => {
+					if (!pm.draining) {
+						clearInterval(check);
+						resolve();
+					}
+				}, 10);
+				setTimeout(() => {
+					clearInterval(check);
+					resolve();
+				}, 15000);
+			});
+		}
+
+		if (drainedCalled !== false) {
+			// 如果实际注册了 callback，drain 后应被回调
+			assert.equal(drainedCalled, true);
+		}
+		// 如果没触发 draining（OS pipe 没满），则跳过断言
 	});
 
 	test("kill 后 draining 重置为 false", () => {

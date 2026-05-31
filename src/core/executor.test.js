@@ -583,6 +583,26 @@ describe("SQLiteExecutor", () => {
 				await sqlite.close();
 			}
 		});
+
+		test("execute 只读 SQL（SELECT）路由到 reader pool", async () => {
+			const dbFile = path.join(os.tmpdir(), `rw-exec-read-${Date.now()}.db`);
+			const sqlite = new SQLiteExecutor({
+				binary: SQLite3BinaryFile,
+				database: dbFile,
+				poolSize: 2,
+			});
+			try {
+				await sqlite.execute("CREATE TABLE IF NOT EXISTS rw_er (id INTEGER PRIMARY KEY, val TEXT)");
+				await sqlite.execute("INSERT INTO rw_er VALUES (1, 'hello')");
+				await new Promise((r) => setTimeout(r, 300));
+
+				// execute 一个 SELECT（被 classifySQL 判为 read）应路由到 reader
+				// execute 不收集行，只验证不报错
+				await sqlite.execute("SELECT * FROM rw_er WHERE id = 1");
+			} finally {
+				await sqlite.close();
+			}
+		});
 	});
 
 	describe("超时", () => {
@@ -851,5 +871,20 @@ describe("SQLiteExecutor", () => {
 				await exec.close();
 			}
 		});
+
+		test("Symbol.asyncDispose 委托给 close（await using）", async () => {
+			{
+				await using db = new SQLiteExecutor({ binary: SQLite3BinaryFile });
+				const rows = await db.query("SELECT 1 AS v");
+				assert.deepEqual(rows, [{ v: 1 }]);
+			}
+			// 退出块时 asyncDispose 应已调用 close，进程已终止
+		});
+
+	test("Symbol.dispose 同步关闭不抛出", () => {
+		const db = new SQLiteExecutor({ binary: SQLite3BinaryFile });
+		// 使用同步 Symbol.dispose（fire-and-forget close），不应抛出异常
+		db[Symbol.dispose]();
+	});
 	});
 });

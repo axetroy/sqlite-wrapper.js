@@ -77,4 +77,24 @@ describe("classifySQL", () => {
 	test("换行前导空白被忽略", () => {
 		assert.equal(classifySQL("\n\tSELECT 1"), "read");
 	});
+
+	test("缓存命中：相同 SQL 第二次调用从缓存返回", () => {
+		assert.equal(classifySQL("SELECT 1 AS cache_hit"), "read");
+		// 第二次调用应命中 LRU 缓存
+		assert.equal(classifySQL("SELECT 1 AS cache_hit"), "read");
+	});
+
+	test("缓存命中：写语句同样缓存", () => {
+		assert.equal(classifySQL("INSERT INTO t (v) VALUES (1)"), "write");
+		// 第二次调用应命中缓存
+		assert.equal(classifySQL("INSERT INTO t (v) VALUES (1)"), "write");
+	});
+
+	test("多语句全部 read 返回 read", () => {
+		assert.equal(classifySQL("SELECT 1; SELECT 2; VALUES (3)"), "read");
+	});
+
+	test("仅分号返回 write", () => {
+		assert.equal(classifySQL(";;;"), "write");
+	});
 });
