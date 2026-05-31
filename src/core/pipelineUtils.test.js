@@ -260,7 +260,7 @@ describe("createFinalizeScheduler", () => {
 		assert.equal(calls.length, 0, "schedule 后不应立即调用 settle");
 
 		// 等待 setImmediate 触发
-		await sleep(0);
+		await new Promise(resolve => setImmediate(resolve));
 		assert.equal(calls.length, 2, "setImmediate 后应完成结算");
 		assert.equal(calls[0].type, "settle");
 		assert.equal(calls[0].value, undefined);
@@ -283,7 +283,7 @@ describe("createFinalizeScheduler", () => {
 		schedule();
 		schedule();
 
-		await sleep(0);
+		await new Promise(resolve => setImmediate(resolve));
 		assert.equal(settleCount, 1, "多次调度只应结算一次");
 	});
 });
