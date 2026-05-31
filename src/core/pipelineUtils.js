@@ -264,9 +264,14 @@ export function handleSentinelTask(task, { settleTask, pendingFinalizeTasks, sch
  * }} params
  */
 export function handleStderrChunk(chunk, { inflight, pendingFinalizeTasks, logger }) {
-	const firstPending = pendingFinalizeTasks.values().next().value;
 	const inflightFirst = inflight.first;
-	const task = firstPending ?? inflightFirst;
+	const firstPending = pendingFinalizeTasks.values().next().value;
+
+	// ── 优先归因给 inflight 任务 ──
+	// inflight 任务正在 sqlite3 中执行，stderr 最可能来自它。
+	// pendingFinalize 中的任务已收到 sentinel 并完成执行，不应被 stderr 误伤。
+	// 仅当无 inflight 任务时，才使用 pendingFinalize 中的第一个任务作为兜底。
+	const task = inflightFirst ?? firstPending;
 
 	if (!task) {
 		logger?.error?.(chunk.trim());
@@ -299,16 +304,19 @@ export function handleStderrChunk(chunk, { inflight, pendingFinalizeTasks, logge
 		return;
 	}
 
-	// 非 WAL batch：传播到其他 pendingFinalize 任务（保守，execute 无零行可判断）
-	for (const t of pendingFinalizeTasks) {
-		if (t !== task) t.stderrText += chunk;
+	// 非 WAL batch：
+	if (task === inflightFirst) {
+		// ── Primary 是 inflight 任务 ──
+		// stderr 最可能来自当前正在执行的 inflight 任务。pendingFinalize 中的
+		// 任务已收到 sentinel 并完成执行，即将被 finalize/settle。不传播 stderr
+		// 给它们，以避免误杀已成功的查询。
+		return;
 	}
 
-	// 仅传播到第一个 inflight 任务（sqlite3 当前正在处理的语句最可能是失败者）
-	// 避免传播到后续所有 inflight 任务，防止 macOS 上因 stderr pipe 提前到达
-	// 而误杀本应成功的查询。
-	if (inflightFirst && inflightFirst !== task) {
-		inflightFirst.stderrText += chunk;
+	// ── Primary 是 pendingFinalize 任务（无 inflight）──
+	// 无法确定 stderr 来源，保守传播到所有 pendingFinalize 任务。
+	for (const t of pendingFinalizeTasks) {
+		if (t !== task) t.stderrText += chunk;
 	}
 }
 

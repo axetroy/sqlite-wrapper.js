@@ -8,6 +8,7 @@ import test, { afterEach, beforeEach, describe } from "node:test";
 import outdent from "outdent";
 
 import { SQLiteExecutor } from "./executor.js";
+import { ProcessManager } from "./process.js";
 import downloadSQLite3 from "../../script/download-sqlite3.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -536,6 +537,55 @@ describe("SQLiteExecutor", () => {
 			const final = await sqlite.query("SELECT id, val FROM random_concurrent WHERE id = 1");
 			assert.deepEqual(final, [{ id: 1, val: "init" }], "初始数据未被破坏");
 		});
+
+		test("回归：混合合法与非法 SQL 并发执行不互相污染（确定性操作）", async () => {
+			await sqlite.execute("CREATE TABLE IF NOT EXISTS reg_concurrent (id INTEGER PRIMARY KEY, val TEXT)");
+			await sqlite.execute("INSERT INTO reg_concurrent (id, val) VALUES (1, 'init')");
+
+			// 确定性混合：10 条合法 + 10 条非法 = 20 条操作
+			const validOps = [];
+			const invalidOps = [];
+
+			// 合法操作：SELECT 和 INSERT 交替
+			for (let i = 0; i < 10; i++) {
+				if (i % 2 === 0) {
+					validOps.push(sqlite.query("SELECT id, val FROM reg_concurrent WHERE id = 1"));
+				} else {
+					validOps.push(sqlite.execute("INSERT INTO reg_concurrent (id, val) VALUES (?, ?)", [i + 100, `reg-${i}`]));
+				}
+			}
+
+			// 非法操作：不同类型的错误 SQL
+			for (let i = 0; i < 10; i++) {
+				const p = sqlite.query(i % 2 === 0 ? "SELECT * FROM nonexistent_reg_table" : "SELECT FORM reg_concurrent");
+				invalidOps.push(p);
+				// assert.rejects 返回的是"验证通过的 promise"（内层 reject → 外层 resolve）
+				// 不用 assert.rejects 包裹，直接放原始 promise 到 invalidOps
+			}
+
+			const allResults = await Promise.allSettled([...validOps, ...invalidOps]);
+
+			const validResults = allResults.slice(0, 10);
+			const invalidResults = allResults.slice(10, 20);
+
+			const fulfilled = validResults.filter((r) => r.status === "fulfilled");
+			const rejected = invalidResults.filter((r) => r.status === "rejected");
+
+			// 断言合法 SQL 不应被 stderr 污染：至少 1 条成功
+			assert.ok(fulfilled.length >= 1, "至少 1 条合法 SQL 应成功");
+			// 断言非法 SQL 确实被 reject
+			assert.ok(rejected.length >= 5, "至少 5 条非法 SQL 被拒绝");
+
+			// 逐个验证非法 SQL 确实 reject（assert.rejects 对已 settled promise 仍生效）
+			for (const p of invalidOps) {
+				await assert.rejects(p);
+			}
+
+			// 验证数据完整性
+			const final = await sqlite.query("SELECT id, val FROM reg_concurrent WHERE id = 1 ORDER BY id ASC");
+			assert.ok(final.length >= 1, "初始数据未被破坏");
+			assert.equal(final[0].val, "init", "初始数据未被破坏");
+		});
 	});
 
 	describe("读写分离", () => {
@@ -890,6 +940,42 @@ describe("SQLiteExecutor", () => {
 				await assert.rejects(
 					exec.query("SELECT 1"),
 					(err) => err instanceof Error,
+				);
+			} finally {
+				await exec.close();
+			}
+		});
+
+		test("进程 error 事件触发进程恢复", async () => {
+			const exec = new SQLiteExecutor({ binary: SQLite3BinaryFile, autoRestart: true });
+			try {
+				// 先确保进程正常运行
+				await exec.execute("SELECT 1");
+				const proc = exec._process;
+				assert.ok(proc, "进程应正在运行");
+
+				// 触发 error 事件 → #handleProcessFailure → auto restart
+				proc.emit("error", new Error("simulated process error"));
+
+				// 等待新进程就绪
+				await new Promise((r) => setTimeout(r, 500));
+
+				// 新进程应正常工作
+				const rows = await exec.query("SELECT 1 AS v");
+				assert.deepEqual(rows, [{ v: 1 }]);
+			} finally {
+				await exec.close();
+			}
+		});
+
+		test("进程 stdout 不可用时设置 fatalError", async (t) => {
+			t.mock.method(ProcessManager.prototype, "start", () => ({}));
+			const exec = new SQLiteExecutor({ binary: SQLite3BinaryFile, autoRestart: false });
+			try {
+				assert.equal(exec._process, null, "进程应未启动");
+				await assert.rejects(
+					exec.query("SELECT 1"),
+					/stdio unavailable/,
 				);
 			} finally {
 				await exec.close();

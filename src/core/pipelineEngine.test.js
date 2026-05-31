@@ -754,6 +754,74 @@ describe("PipelineEngine", () => {
 		});
 	});
 
+	// ── 回归：非 WAL batch stderr 不污染已完成任务 ─────
+	//
+	// 场景：batch 中前一个任务已完成（pendingFinalize），后一个任务仍在执行中
+	//（inflight）时产生 stderr。此时 stderr 应归因给 inflight 任务，不应传播到
+	// 已完成的 pendingFinalize 任务，以避免误杀合法查询（参见 #48 修复）。
+	//
+	// 根因：handleStderrChunk 原实现优先选取 firstPending（已完成任务）作为
+	// primary，然后通过非 WAL batch 传播规则将 stderr 扩散到所有 pendingFinalize
+	// 任务。修复后优先选取 inflightFirst（正在执行的任务），且当 primary 是
+	// inflight 任务时不向 pendingFinalize 传播。
+
+	describe("回归：非 WAL batch stderr 不污染已完成任务", () => {
+		beforeEach(() => {
+			engine.deactivate();
+		});
+
+		test("回归: inflight 任务失败时 stderr 归因正确，不污染已完成任务", async () => {
+			const { task: t1, promise: p1 } = createTask({
+				kind: "query",
+				sql: "SELECT 1 AS v",
+				token: "reg-t1",
+			});
+			const { task: t2, promise: p2 } = createTask({
+				kind: "execute",
+				sql: "INSERT INTO t VALUES (1)",
+				token: "reg-t2",
+			});
+
+			engine.enqueue(t1);
+			engine.enqueue(t2);
+			engine.activate();
+			engine.pump();
+
+			// 验证为混合 batch（非 WAL batch）
+			const payload = mockPM._writes[0];
+			assert.ok(!payload.startsWith("BEGIN;"), "混合 query+execute 不应使用 WAL batch");
+
+			// t1 数据行 + sentinel → t1 进入 pendingFinalize
+			engine.handleStdoutChunk(`[{"v":1}]`);
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"reg-t1"}]`);
+
+			// 此时 t1 在 pendingFinalize，t2 仍在 inflight（sentinel 未到）
+			// stderr 到达——应归因给 inflight 的 t2，不传播到 t1
+			engine.handleStderrChunk("UNIQUE constraint failed");
+
+			// t2 sentinel 随后到达
+			engine.handleStdoutChunk(`[{"${TOKEN_COLUMN}":"reg-t2"}]`);
+
+			await flush();
+
+			// t1（已完成查询）不应被 stderr 污染
+			assert.equal(t1.stderrText, "", "已完成任务 t1 不应被 stderr 污染");
+			assert.deepEqual(t1.rows, [{ v: 1 }], "t1 数据行应完整保留");
+
+			// t2（inflight 任务）应持有 stderr
+			assert.ok(t2.stderrText.includes("UNIQUE constraint failed"), "inflight 任务 t2 应持有 stderr");
+
+			// 最终 settle 结果
+			const result = await p1;
+			assert.deepEqual(result, [{ v: 1 }], "t1 应成功返回数据");
+
+			await assert.rejects(p2, /UNIQUE constraint/, "t2 应被 reject");
+
+			disarm(t1);
+			disarm(t2);
+		});
+	});
+
 	// ── maxInflight ──────────────────────────────────
 
 	describe("maxInflight", () => {

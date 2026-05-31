@@ -696,25 +696,25 @@ describe("handleStderrChunk", () => {
 		ctx.pendingFinalizeTasks.add(t2);
 
 		handleStderrChunk("error", ctx);
-		// 实现优先归因到 firstPending（t2），因 batchId 为空不传播
-		assert.equal(t1.stderrText, "", "inflight 任务不应获得 stderr");
-		assert.ok(t2.stderrText.includes("error"), "pendingFinalize 第一个任务获得 stderr");
+		// 优先归因给 inflight 任务（t1），因 batchId 为空不传播给 t2
+		assert.ok(t1.stderrText.includes("error"), "inflight 任务获得 stderr（优先归因）");
+		assert.equal(t2.stderrText, "", "pendingFinalize 任务不应获得 stderr（未传播）");
 	});
 
-	test("非 WAL batch 带 batchId 时传播到第一个 inflight 任务", () => {
+	test("非 WAL batch 中 inflight 任务被优先归因，不传播到 pendingFinalize", () => {
 		const ctx = makeContext();
 		// pendingFinalize 中有一个带 batchId 的非 WAL 任务
 		const pendingTask = { kind: "execute", stderrText: "", batchId: "batch-1" };
 		ctx.pendingFinalizeTasks.add(pendingTask);
-		// inflight 中有一个不同的任务
+		// inflight 中有一个不同的任务（当前正在执行）
 		const inflightTask = { kind: "execute", stderrText: "" };
 		ctx.inflight.push(inflightTask);
 
 		handleStderrChunk("batch error", ctx);
 
-		// pendingTask 获得 stderr
-		assert.ok(pendingTask.stderrText.includes("batch error"));
-		// inflightTask 也应获得传播的 stderr（非 WAL batch 的 batch 内传播规则）
-		assert.ok(inflightTask.stderrText.includes("batch error"), "inflight 任务应获得传播的 stderr");
+		// inflight 任务优先获得 stderr（正在执行，最可能是失败源）
+		assert.ok(inflightTask.stderrText.includes("batch error"), "inflight 任务获得 stderr（优先归因）");
+		// pendingFinalize 任务不应被传播，它已收到 sentinel 并完成执行
+		assert.equal(pendingTask.stderrText, "", "pendingFinalize 任务不应获得 stderr（不传播）");
 	});
 });
