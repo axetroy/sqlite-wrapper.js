@@ -2,14 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const isWindows = os.platform() === "win32";
+function isWindows() {
+	return os.platform() === "win32";
+}
 
 /**
  * 判断文件是否可执行
  */
 function isExecutable(filePath) {
 	try {
-		if (isWindows) {
+		if (isWindows()) {
 			// Windows：只要文件存在即可（是否可执行由扩展名判断）
 			return fs.statSync(filePath).isFile();
 		} else {
@@ -25,7 +27,7 @@ function isExecutable(filePath) {
  * 获取 Windows 下的可执行扩展名
  */
 function getPathExts() {
-	if (!isWindows) return [""];
+	if (!isWindows()) return [""];
 	const ext = process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM;.PS1";
 	return ext.split(";").map((e) => e.toLowerCase());
 }
@@ -44,7 +46,7 @@ export function which(command) {
 	if (command.includes(path.sep)) {
 		const fullPath = path.resolve(command);
 
-		if (isWindows) {
+		if (isWindows()) {
 			// Windows：需要尝试补全扩展名
 			if (path.extname(fullPath)) {
 				return isExecutable(fullPath) ? fullPath : null;
@@ -68,7 +70,7 @@ export function which(command) {
 	for (const dir of pathDirs) {
 		if (!dir) continue;
 
-		if (isWindows) {
+		if (isWindows()) {
 			for (const ext of pathExts) {
 				const file = path.join(dir, command + ext);
 				if (isExecutable(file)) return file;
