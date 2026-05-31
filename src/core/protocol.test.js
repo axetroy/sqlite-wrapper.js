@@ -246,4 +246,58 @@ describe("buildBatchPayload", () => {
 		const payload = buildBatchPayload(batch);
 		assert.ok(!payload.startsWith("BEGIN;"), "不应以 BEGIN 开头");
 	});
+
+	test("BEGIN; 后跟其他 SQL 触发 startsWith(\"BEGIN;\") 分支", () => {
+		// "BEGIN; SELECT 1" !== "BEGIN;" 且不以 "BEGIN " 开头，但以 "BEGIN;" 开头
+		// isTransactionControl 返回 true → 不使用 WAL batch
+		const payload = buildBatchPayload([
+			{ kind: "execute", sql: "BEGIN; SELECT 1", token: "t1" },
+			{ kind: "execute", sql: "INSERT INTO t VALUES (2)", token: "t2" },
+		]);
+		assert.ok(!payload.startsWith("BEGIN;\n"), "不应使用 WAL batch");
+		assert.ok(payload.includes("BEGIN; SELECT 1;\nSELECT 't1' AS __sqlite_executor_token__;"), "原始 SQL 和 sentinel 应完整保留");
+	});
+
+	test("COMMIT; 后跟其他 SQL 触发 startsWith(\"COMMIT;\") 分支", () => {
+		const payload = buildBatchPayload([
+			{ kind: "execute", sql: "SELECT 1", token: "t1" },
+			{ kind: "execute", sql: "COMMIT; SELECT 2", token: "t2" },
+		]);
+		assert.ok(!payload.startsWith("BEGIN;\n"), "不应使用 WAL batch");
+		assert.ok(payload.includes("COMMIT; SELECT 2;\nSELECT 't2' AS __sqlite_executor_token__;"), "原始 SQL 和 sentinel 应完整保留");
+	});
+
+	test("ROLLBACK; 后跟其他 SQL 触发 startsWith(\"ROLLBACK;\") 分支", () => {
+		const payload = buildBatchPayload([
+			{ kind: "execute", sql: "SELECT 1", token: "t1" },
+			{ kind: "execute", sql: "ROLLBACK; SELECT 2", token: "t2" },
+		]);
+		assert.ok(!payload.startsWith("BEGIN;\n"), "不应使用 WAL batch");
+		assert.ok(payload.includes("ROLLBACK; SELECT 2;\nSELECT 't2' AS __sqlite_executor_token__;"), "原始 SQL 和 sentinel 应完整保留");
+	});
+
+	test("小写 begin 评估首字母 'b'（f === 98）分支", () => {
+		// isTransactionControl("begin") 返回 false（大小写敏感），WAL batch 被使用
+		const payload = buildBatchPayload([
+			{ kind: "execute", sql: "begin", token: "t1" },
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t2" },
+		]);
+		assert.ok(payload.startsWith("BEGIN;\n"), "小写 begin 未命中大写检查，WAL batch 被使用");
+	});
+
+	test("小写 commit 评估首字母 'c'（f === 99）分支", () => {
+		const payload = buildBatchPayload([
+			{ kind: "execute", sql: "SELECT 1", token: "t1" },
+			{ kind: "execute", sql: "commit", token: "t2" },
+		]);
+		assert.ok(payload.startsWith("BEGIN;\n"), "小写 commit 未命中大写检查，WAL batch 被使用");
+	});
+
+	test("小写 rollback 评估首字母 'r'（f === 114）分支", () => {
+		const payload = buildBatchPayload([
+			{ kind: "execute", sql: "SELECT 1", token: "t1" },
+			{ kind: "execute", sql: "rollback", token: "t2" },
+		]);
+		assert.ok(payload.startsWith("BEGIN;\n"), "小写 rollback 未命中大写检查，WAL batch 被使用");
+	});
 });

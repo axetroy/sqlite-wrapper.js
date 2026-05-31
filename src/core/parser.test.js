@@ -392,6 +392,20 @@ describe("createRowStreamParser", () => {
 		}
 	});
 
+	test("大批量元素触发 64KB 缓冲区裁剪", () => {
+		// 每个 {"a":0}, 约 8 字节；65536 / 8 = 8192，需要 8193+ 个元素
+		const rows = [];
+		const parser = createRowStreamParser((raw) => rows.push(raw));
+		const count = 9000;
+		const elements = Array.from({ length: count }, () => '{"a":0}');
+		const json = "[" + elements.join(",") + "]";
+		assert.ok(json.length > 65536, `json 长度 ${json.length} 应超过 64KB`);
+		parser.feed(json);
+		assert.equal(rows.length, count);
+		assert.equal(rows[0], '{"a":0}');
+		assert.equal(rows[count - 1], '{"a":0}');
+	});
+
 	test("fuzz：createRowStreamParser 随机数据不崩溃", () => {
 		const rows = [];
 		const parser = createRowStreamParser((raw) => rows.push(raw));

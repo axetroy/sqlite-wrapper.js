@@ -362,6 +362,23 @@ describe("handleParsedValue", () => {
 		assert.equal(afterCalled, true);
 	});
 
+	test("非标准格式 sentinel 走 isSentinelRow 回退路径", () => {
+		// isSentinelRaw 精确匹配要求原始字符串与 buildSentinelStr 完全一致。
+		// 若 JSON 存在多余空白符（如冒号前后空格），isSentinelRaw 失败后
+		// 应由 JSON.parse + isSentinelRow 兜底匹配。
+		const task = { token: "tok-fallback" };
+		let afterCalled = false;
+		// 注意：冒号前有额外空格，与标准格式不同
+		handleParsedValue(`[{"__sqlite_executor_token__" : "tok-fallback"}]`, makeMockInflight(task), {
+			afterSentinel: (t) => {
+				afterCalled = true;
+				assert.equal(t, task);
+			},
+			rejectAll: () => {},
+		});
+		assert.equal(afterCalled, true, "isSentinelRow 回退路径应匹配 sentinel");
+	});
+
 	test("timedout 任务跳过行收集", () => {
 		const rows = [];
 		const task = { token: "tok-1", kind: "query", timedout: true, rows };

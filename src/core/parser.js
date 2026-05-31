@@ -244,7 +244,8 @@ export function createRowStreamParser(onRow) {
 			// 1. 追加新数据到 buffer；将状态缓存到局部变量避免隐藏类查找
 			this.buffer += chunk;
 
-			const buffer = this.buffer;
+			// 使用 let 以便 64KB 物理裁剪时同步更新局部引用
+			let buffer = this.buffer;
 			let started = this.started;
 			let inString = this.inString;
 			let escaped = this.escaped;
@@ -366,7 +367,8 @@ export function createRowStreamParser(onRow) {
 							index = consumed;
 							// 累积消费超过 64KB 时一次物理裁剪，避免 buffer 膨胀和过多 String 分配
 							if (consumed > 65536) {
-								this.buffer = buffer.slice(consumed);
+								buffer = buffer.slice(consumed);
+								this.buffer = buffer;
 								this._consumed = 0;
 								index = 0;
 								consumed = 0;
