@@ -79,6 +79,10 @@ describe("TaskWorker", () => {
 		test("idle 在无任务时返回 true", () => {
 			assert.equal(worker.idle, true);
 		});
+
+		test("name getter 返回构造时传入的名称", () => {
+			assert.equal(worker.name, "test-worker");
+		});
 	});
 
 	describe("串行与批量", () => {
@@ -263,6 +267,10 @@ describe("TaskWorker", () => {
 			await p1;
 			await p2;
 		});
+
+		test("_sweepTimer 在无任务时返回 null", () => {
+			assert.equal(worker._sweepTimer, null);
+		});
 	});
 
 	describe("生命周期管理", () => {
@@ -297,6 +305,22 @@ describe("TaskWorker", () => {
 			});
 			worker._process.kill("SIGKILL");
 			await assert.rejects(p, /exited unexpectedly/);
+		});
+
+		test("进程 error 事件拒绝待处理任务", async () => {
+			const p = new Promise((resolve, reject) => {
+				worker.enqueue({
+					kind: "query",
+					sql: "SELECT 1",
+					timeout: 10000,
+					token: "tok-err-ev",
+					onRow: null,
+					resolve,
+					reject,
+				});
+			});
+			worker._process.emit("error", new Error("simulated process error"));
+			await assert.rejects(p, /simulated process error/);
 		});
 	});
 

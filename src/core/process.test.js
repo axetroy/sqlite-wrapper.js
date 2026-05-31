@@ -163,6 +163,8 @@ describe("ProcessManager", { skip: !sqlite3Ready }, () => {
 		pm.kill();
 	});
 
+
+
 	// ── drain 背压 ─────────────────────────────
 
 	test("draining getter 初始为 false", () => {

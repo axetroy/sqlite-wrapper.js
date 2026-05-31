@@ -78,6 +78,18 @@ describe("classifySQL", () => {
 		assert.equal(classifySQL("\n\tSELECT 1"), "read");
 	});
 
+	test("单个关键词无空格: SELECT", () => {
+		assert.equal(classifySQL("SELECT"), "read");
+	});
+
+	test("单个关键词无空格: EXPLAIN", () => {
+		assert.equal(classifySQL("EXPLAIN"), "read");
+	});
+
+	test("单个关键词无空格: INSERT", () => {
+		assert.equal(classifySQL("INSERT"), "write");
+	});
+
 	test("缓存命中：相同 SQL 第二次调用从缓存返回", () => {
 		assert.equal(classifySQL("SELECT 1 AS cache_hit"), "read");
 		// 第二次调用应命中 LRU 缓存

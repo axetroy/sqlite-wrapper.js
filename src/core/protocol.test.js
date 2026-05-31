@@ -157,13 +157,41 @@ describe("buildBatchPayload", () => {
 	});
 
 	test("包含 BEGIN TRANSACTION 时不使用 WAL batch", () => {
-		const batch = [
+		const payload = buildBatchPayload([
 			{ kind: "execute", sql: "BEGIN TRANSACTION", token: "t1" },
 			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t2" },
-		];
-		const payload = buildBatchPayload(batch);
+		], 10);
 		assert.ok(!payload.startsWith("BEGIN;"), "不应以 BEGIN 开头");
-		assert.ok(payload.includes("INSERT INTO t VALUES (1)"));
+	});
+
+	test("BEGIN; 精确匹配也被视为事务控制", () => {
+		// 非 WAL batch 模式：每个任务携带独立 sentinel token
+		// WAL batch:  BEGIN;\nTASK1_SQL\nTASK2_SQL\nCOMMIT;\nSELECT 'token1'...\nSELECT 'token2'...
+		// 非 WAL:     TASK1_SQL;\nSELECT 'token1'...\nTASK2_SQL;\nSELECT 'token2'...
+		const payload = buildBatchPayload([
+			{ kind: "execute", sql: "BEGIN;", token: "t1" },
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t2" },
+		], 10);
+		// 非 WAL: BEGIN; 后紧跟它自己的 sentinel
+		assert.ok(payload.includes("BEGIN;\nSELECT 't1'"), "BEGIN; 应作为独立任务携带 sentinel");
+	});
+
+	test("COMMIT; 精确匹配也被视为事务控制", () => {
+		const payload = buildBatchPayload([
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t1" },
+			{ kind: "execute", sql: "COMMIT;", token: "t2" },
+		], 10);
+		// 非 WAL: COMMIT; 后紧跟它自己的 sentinel（而非 batch 末尾的 sentinel）
+		assert.ok(payload.includes("COMMIT;\nSELECT 't2'"), "COMMIT; 应作为独立任务携带 sentinel");
+	});
+
+	test("ROLLBACK; 精确匹配也被视为事务控制", () => {
+		const payload = buildBatchPayload([
+			{ kind: "execute", sql: "INSERT INTO t VALUES (1)", token: "t1" },
+			{ kind: "execute", sql: "ROLLBACK;", token: "t2" },
+		], 10);
+		// 非 WAL: ROLLBACK; 后紧跟它自己的 sentinel
+		assert.ok(payload.includes("ROLLBACK;\nSELECT 't2'"), "ROLLBACK; 应作为独立任务携带 sentinel");
 	});
 
 	test("包含 COMMIT 时不使用 WAL batch", () => {

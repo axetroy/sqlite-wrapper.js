@@ -29,6 +29,9 @@
     "scripts": {
         "test": "node script/run-tests.mjs",
         "test:update-snapshots": "node script/run-tests.mjs --test-update-snapshots",
+        "coverage": "c8 --all --src=src node script/run-tests.mjs",
+        "coverage:html": "c8 --all --src=src --reporter=text --reporter=html --reporter=lcovonly node script/run-tests.mjs",
+        "coverage:check": "c8 --all --src=src --check-coverage --lines 90 --functions 90 --branches 90 node script/run-tests.mjs",
         "benchmark": "node benchmark/index.bench.js",
         "benchmark:rw-split": "node benchmark/rw-split.bench.js",
         "benchmark:queue": "node benchmark/queue.bench.js",
@@ -38,6 +41,32 @@
         "build": "knip && rslib build",
         "prepack": "npm run build"
     },
+    "c8": {
+        "reporter": [
+            "text",
+            "html",
+            "lcovonly"
+        ],
+        "exclude": [
+            "coverage/**",
+            "dist/**",
+            "script/**",
+            "benchmark/**",
+            "fixtures/**",
+            "test/**",
+            "**/*.test.js",
+            "**/*.d.ts",
+            "**/node_modules/**"
+        ],
+        "all": true,
+        "src": [
+            "src"
+        ],
+        "check-coverage": false,
+        "lines": 90,
+        "functions": 90,
+        "branches": 90
+    },
     "author": "Axetroy <axetroy.dev@gmail.com>",
     "license": "SEE LICENSE IN LICENSE",
     "devDependencies": {
@@ -45,6 +74,7 @@
         "@types/node": "^22.14.1",
         "adm-zip": "^0.5.16",
         "axios": "^1.13.5",
+        "c8": "^11.0.0",
         "knip": "^5.53.0",
         "outdent": "^0.8.0",
         "typescript": "^5.8.3"

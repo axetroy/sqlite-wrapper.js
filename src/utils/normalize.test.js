@@ -125,6 +125,18 @@ describe("normalizeSQLTemplate", () => {
 		assert.equal(t.segments[1], ";");
 	});
 
+	test("双引号标识符内的转义 \"\" 被保留", () => {
+		// normalizeSQL: 在 STATE_DOUBLE_QUOTE 中遇到 "" 应输出一个 "
+		const sql = normalizeSQL('SELECT "my""col" FROM t');
+		assert.equal(sql, 'SELECT "my""col" FROM t;');
+	});
+
+	test("normalizeSQLTemplate 含双引号转义 \"\"", () => {
+		const t = normalizeSQLTemplate('SELECT "my""col" FROM t WHERE id = ?');
+		assert.equal(t.normalized, 'SELECT "my""col" FROM t WHERE id = ?;');
+		assert.equal(t.paramCount, 1);
+	});
+
 	test("多次调用缓存命中返回相同对象", () => {
 		const a = normalizeSQLTemplate("SELECT 1");
 		const b = normalizeSQLTemplate("SELECT 1");

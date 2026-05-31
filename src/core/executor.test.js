@@ -184,6 +184,30 @@ describe("SQLiteExecutor", () => {
 			assert.equal(result[1].val, "b");
 		});
 
+		test("事务激活期间外部任务被 defer 到延迟队列", async () => {
+			await sqlite.execute("CREATE TABLE IF NOT EXISTS defer_tx (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
+
+			let txStarted = false;
+			const txPromise = sqlite.transaction(async (tx) => {
+				txStarted = true;
+				await tx.execute("INSERT INTO defer_tx (val) VALUES ('from_tx')");
+			});
+
+			// 等待事务 scope 激活（#activeScopeId 已设置）
+			while (!txStarted) {
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+
+			// 此时事务 scope 已激活，外部写入应被 defer，不会与事务任务交错
+			const outsidePromise = sqlite.execute("INSERT INTO defer_tx (val) VALUES ('outside')");
+
+			await Promise.all([txPromise, outsidePromise]);
+			const rows = await sqlite.query("SELECT val FROM defer_tx ORDER BY id ASC");
+			assert.equal(rows.length, 2);
+			assert.equal(rows[0].val, "from_tx");
+			assert.equal(rows[1].val, "outside");
+		});
+
 		test("transaction 内 stream 逐行消费", async () => {
 			await sqlite.execute("CREATE TABLE IF NOT EXISTS tx_stream (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)");
 			await sqlite.execute("INSERT INTO tx_stream (val) VALUES ('a'), ('b'), ('c')");

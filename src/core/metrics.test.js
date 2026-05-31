@@ -102,20 +102,28 @@ test("throughput 不严格验证计算", () => {
 	assert.ok(s.throughput === 0 || s.throughput > 0);
 });
 
-test("getter 与 snapshot 值一致", () => {
-	const m = new Metrics();
-	m.incrementTasksTotal("execute");
-	m.incrementTasksSuccess(50);
-	m.incrementTasksFailed();
-	m.incrementTasksTimeout();
-	m.incrementProcessRestarts();
-	const s = m.snapshot();
-	assert.equal(m.tasksTotal, s.tasksTotal);
-	assert.equal(m.tasksSuccess, s.tasksSuccess);
-	assert.equal(m.tasksFailed, s.tasksFailed);
-	assert.equal(m.tasksTimeout, s.tasksTimeout);
-	assert.equal(m.processRestarts, s.processRestarts);
-	assert.equal(m.executeCount, s.executeCount);
-	assert.equal(m.queryCount, s.queryCount);
-	assert.equal(m.streamCount, s.streamCount);
-});
+	test("getter 与 snapshot 值一致", () => {
+		const m = new Metrics();
+		m.incrementTasksTotal("execute");
+		m.incrementTasksSuccess(50);
+		m.incrementTasksFailed();
+		m.incrementTasksTimeout();
+		m.incrementProcessRestarts();
+		const s = m.snapshot();
+		assert.equal(m.tasksTotal, s.tasksTotal);
+		assert.equal(m.tasksSuccess, s.tasksSuccess);
+		assert.equal(m.tasksFailed, s.tasksFailed);
+		assert.equal(m.tasksTimeout, s.tasksTimeout);
+		assert.equal(m.processRestarts, s.processRestarts);
+		assert.equal(m.executeCount, s.executeCount);
+		assert.equal(m.queryCount, s.queryCount);
+		assert.equal(m.streamCount, s.streamCount);
+	});
+
+	test("startTime getter 返回创建时的 Unix 毫秒时间戳", () => {
+		const m = new Metrics();
+		const now = Date.now();
+		assert.ok(typeof m.startTime === "number");
+		assert.ok(m.startTime >= now - 1000); // 在 1 秒内创建
+		assert.ok(m.startTime <= now + 1000);
+	});

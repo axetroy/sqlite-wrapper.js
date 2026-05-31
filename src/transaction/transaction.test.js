@@ -94,4 +94,10 @@ describe("createTransactionHandle", () => {
 		assert.equal(calls[0].kind, "query");
 		assert.deepEqual(result, [{ id: 1 }]);
 	});
+
+	test("stream params 非数组时同步抛出 TypeError", () => {
+		const mockExecutor = { enqueue: () => {} };
+		const handle = createTransactionHandle(Symbol("tx"), mockExecutor);
+		assert.throws(() => handle.stream("SELECT 1", "not-an-array"), /params must be an array/);
+	});
 });

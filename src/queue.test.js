@@ -171,6 +171,20 @@ describe("Queue", () => {
 		assert.deepEqual(a.toArray(), [1, 2]);
 	});
 
+	test("prependAll 总大小超过初始容量触发扩容", () => {
+		const a = new Queue();
+		const b = new Queue();
+		for (let i = 0; i < 10; i++) a.enqueue(i);
+		for (let i = 10; i < 20; i++) b.enqueue(i);
+		// totalSize = 20 > 默认容量 16，触发 while (newCap < totalSize) newCap *= 2
+		a.prependAll(b);
+		const expected = [];
+		for (let i = 10; i < 20; i++) expected.push(i);
+		for (let i = 0; i < 10; i++) expected.push(i);
+		assert.deepEqual(a.toArray(), expected);
+		assert.equal(b.size, 0);
+	});
+
 	test("空队列 peek 和 dequeue 返回 null", () => {
 		const queue = new Queue();
 		assert.equal(queue.peek(), null);

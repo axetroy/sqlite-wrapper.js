@@ -37,6 +37,10 @@ describe("interpolateSQL", () => {
 		assert.equal(interpolateSQL("SELECT 1", []), "SELECT 1");
 	});
 
+	test("不含 ? 但有参数时抛出 Too many parameters", () => {
+		assert.throws(() => interpolateSQL("SELECT 1", [42]), /Too many parameters provided/);
+	});
+
 	test("含 ? 但传空数组报错", () => {
 		assert.throws(() => interpolateSQL("SELECT ?", []), /Too few parameters provided/);
 	});
