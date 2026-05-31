@@ -101,6 +101,12 @@ describe("ProcessManager", { skip: !sqlite3Ready }, () => {
 		assert.equal(result, null);
 	});
 
+	test("未启动时 write 不报错", () => {
+		const pm = createPM();
+		// 未启动时 #proc 为 null，write 应在 !stream 守卫处安全返回
+		pm.write("SELECT 1;\n");
+	});
+
 	test("多次 start 创建不同进程", async () => {
 		const pm = createPM();
 		const proc1 = pm.start();
@@ -177,6 +183,48 @@ describe("ProcessManager", { skip: !sqlite3Ready }, () => {
 		});
 
 		await shutdownPromise;
+		pm.kill();
+	});
+
+	test("drain 处理中 re-drain 触发 #notifyIfDrained 提前返回", async () => {
+		const pm = createPM();
+		const proc = pm.start();
+		proc.stdout.on("data", () => {});
+		proc.stderr.on("data", () => {});
+
+		// 写入超大 payload 触发 draining
+		const LARGE = 'SELECT 1 AS v;\n'.repeat(30000); // ~510KB
+		pm.write(LARGE);
+
+		if (!pm.draining) {
+			// pipe 未满，跳过断言（不同平台 pipe 容量不同）
+			pm.kill();
+			return;
+		}
+
+		// draining 期间再写入大 payload → 进入 #writeBuffer
+		pm.write(LARGE);
+
+		// 手动触发 drain 事件。pipe 仍满 → #flushBuffer() 会 re-drain
+		proc.stdin.emit("drain");
+
+		// re-drain 发生后 draining 应还原为 true
+		assert.equal(pm.draining, true,
+			"手动 drain 后 #flushBuffer 应重新触发 draining（#notifyIfDrained 提前返回）");
+
+		// 等待真实的 OS drain 事件（期间可能再次 drain，最终排空）
+		if (pm.draining) {
+			await new Promise((resolve) => {
+				const check = setInterval(() => {
+					if (!pm.draining) {
+						clearInterval(check);
+						resolve();
+					}
+				}, 10);
+				setTimeout(() => { clearInterval(check); resolve(); }, 30000);
+			});
+		}
+
 		pm.kill();
 	});
 

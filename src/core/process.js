@@ -157,7 +157,7 @@ export class ProcessManager {
 	 * 每个回调最多触发一次（触发后从 `#drainCallbacks` 移除）。
 	 */
 	#notifyIfDrained() {
-		if (this.#draining || this.#writeBuffer.length > 0) return;
+		if (this.#draining) return;
 		const callbacks = this.#drainCallbacks;
 		this.#drainCallbacks = [];
 		for (const cb of callbacks) {
