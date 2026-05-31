@@ -19,7 +19,8 @@ describe("which", () => {
 	});
 
 	describe("绝对路径", () => {
-		test("Windows 绝对路径 + 已有扩展名 → 找到", () => {
+		test("Windows 绝对路径 + 已有扩展名 → 找到", (t) => {
+			t.mock.method(os, "platform", () => "win32");
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "which-ext-"));
 			const filePath = path.join(tmpDir, "tool.cmd");
 			fs.writeFileSync(filePath, "@echo off\n");
@@ -30,7 +31,8 @@ describe("which", () => {
 			}
 		});
 
-		test("Windows 绝对路径 + 已有扩展名但文件不存在 → null", () => {
+		test("Windows 绝对路径 + 已有扩展名但文件不存在 → null", (t) => {
+			t.mock.method(os, "platform", () => "win32");
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "which-ext-miss-"));
 			const filePath = path.join(tmpDir, "missing.cmd");
 			// 不创建文件，文件不存在
@@ -41,7 +43,8 @@ describe("which", () => {
 			}
 		});
 
-		test("Windows 绝对路径 + 无扩展名 → 尝试 PATHEXT 找到", () => {
+		test("Windows 绝对路径 + 无扩展名 → 尝试 PATHEXT 找到", (t) => {
+			t.mock.method(os, "platform", () => "win32");
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "which-noext-"));
 			// 创建 tool.cmd（无扩展名的 command→尝试 .CMD 扩展名）
 			const cmdPath = path.join(tmpDir, "tool.cmd");
@@ -56,7 +59,8 @@ describe("which", () => {
 			}
 		});
 
-		test("Windows 绝对路径 + 无扩展名 → PATHEXT 均不匹配 → null", () => {
+		test("Windows 绝对路径 + 无扩展名 → PATHEXT 均不匹配 → null", (t) => {
+			t.mock.method(os, "platform", () => "win32");
 			const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "which-noext-"));
 			// 创建 tool.xyz（不在 PATHEXT 中，也不对应裸文件）
 			const xyzPath = path.join(tmpDir, "tool.xyz");
@@ -168,8 +172,7 @@ describe("which", () => {
 
 	describe("getPathExts", () => {
 		test("Windows 下返回 PATHEXT 中的扩展名列表", (t) => {
-			// 手动导入 which.js 中的内部函数
-			// 通过 which 的行为间接验证
+			t.mock.method(os, "platform", () => "win32");
 			const origPathext = process.env.PATHEXT;
 			process.env.PATHEXT = ".ZZZ;.YYY";
 			try {
@@ -191,7 +194,8 @@ describe("which", () => {
 			}
 		});
 
-		test("PATHEXT 环境变量不存在时使用默认值", () => {
+		test("PATHEXT 环境变量不存在时使用默认值", (t) => {
+			t.mock.method(os, "platform", () => "win32");
 			const origPathext = process.env.PATHEXT;
 			delete process.env.PATHEXT;
 			try {
