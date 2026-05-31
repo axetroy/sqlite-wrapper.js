@@ -163,6 +163,22 @@ describe("ProcessManager", { skip: !sqlite3Ready }, () => {
 		pm.kill();
 	});
 
+	test("gracefulShutdown 在进程 error 事件时静默处理", async () => {
+		const pm = createPM();
+		const proc = pm.start();
+
+		// 在 gracefulShutdown 调用 once(proc, "close") 后，
+		// 触发 error 事件使 once Promise reject → 进入 catch 块
+		const shutdownPromise = pm.gracefulShutdown();
+
+		// 确保 once 已注册监听器后触发 error
+		process.nextTick(() => {
+			proc.emit("error", new Error("fake error"));
+		});
+
+		await shutdownPromise;
+		pm.kill();
+	});
 
 
 	// ── drain 背压 ─────────────────────────────

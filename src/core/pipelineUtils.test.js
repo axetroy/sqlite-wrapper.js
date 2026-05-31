@@ -700,4 +700,21 @@ describe("handleStderrChunk", () => {
 		assert.equal(t1.stderrText, "", "inflight 任务不应获得 stderr");
 		assert.ok(t2.stderrText.includes("error"), "pendingFinalize 第一个任务获得 stderr");
 	});
+
+	test("非 WAL batch 带 batchId 时传播到第一个 inflight 任务", () => {
+		const ctx = makeContext();
+		// pendingFinalize 中有一个带 batchId 的非 WAL 任务
+		const pendingTask = { kind: "execute", stderrText: "", batchId: "batch-1" };
+		ctx.pendingFinalizeTasks.add(pendingTask);
+		// inflight 中有一个不同的任务
+		const inflightTask = { kind: "execute", stderrText: "" };
+		ctx.inflight.push(inflightTask);
+
+		handleStderrChunk("batch error", ctx);
+
+		// pendingTask 获得 stderr
+		assert.ok(pendingTask.stderrText.includes("batch error"));
+		// inflightTask 也应获得传播的 stderr（非 WAL batch 的 batch 内传播规则）
+		assert.ok(inflightTask.stderrText.includes("batch error"), "inflight 任务应获得传播的 stderr");
+	});
 });
