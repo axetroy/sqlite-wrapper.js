@@ -16,10 +16,10 @@ export interface MetricsSnapshot {
 	queryCount: number;
 	/** stream 操作执行次数 */
 	streamCount: number;
-	/** 平均查询耗时（毫秒） */
-	avgQueryTime: number;
-	/** 每秒查询数 */
-	qps: number;
+	/** 所有成功任务的平均耗时（毫秒） */
+	avgTaskDuration: number;
+	/** 每秒处理任务数（含 execute/query/stream） */
+	throughput: number;
 	/** 运行时长（秒） */
 	uptime: number;
 }

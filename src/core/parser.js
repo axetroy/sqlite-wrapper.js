@@ -188,7 +188,7 @@ export function createJsonValueParser(onValue) {
 
 /**
  * 创建一个行流解析器，用于解析 sqlite3 `-json` 模式下输出的 JSON 数组。
- * 它不是一次性解析整个数组，而是在元素到达时逐行回调 `onRow`，
+ * 不是在数组整体解析完后一次性返回，而是在每个元素到达时逐行回调 `onRow`，
  * 支持分块输入、嵌套对象/数组、转义字符串。
  *
  * 核心状态机比 createJsonValueParser 更复杂，因为需要在数组上下文中
@@ -342,7 +342,7 @@ export function createRowStreamParser(onRow) {
 					if (lookAhead < buffer.length) {
 						const delimiter = buffer.charCodeAt(lookAhead);
 						if (delimiter === CHAR_COMMA || delimiter === CHAR_CLOSE_BRACKET) {
-							// 元素完整：切片出元素文本并回调
+							// 元素完整，切片出元素文本并回调
 							onRow(buffer.slice(elementStart, elementEnd));
 							// 不直接物理裁剪 buffer，改用 consumed 记录已消费位置
 							consumed = lookAhead + 1;

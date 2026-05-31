@@ -1,9 +1,9 @@
 import { Queue } from "./queue.js";
 import { InflightTracker } from "./inflightTracker.js";
-import { createJsonValueParser, toError } from "./parser.js";
-import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
-import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
-import { finalizePendingTasks, prepareTaskTimeout } from "./pipelineUtils.js";
+import { createJsonValueParser } from "./parser.js";
+import { buildBatchPayload } from "./protocol.js";
+import { settleTask } from "./settleUtils.js";
+import { handleParsedValue, createSweeper, createFinalizeScheduler, prepareTaskTimeout } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
@@ -19,7 +19,6 @@ export class PipelineEngine {
 	#queue = new Queue();
 	#inflight = new InflightTracker();
 	#pendingFinalizeTasks = new Set();
-	#scheduledFinalize = false;
 	#sharedValueParser;
 	#processManager;
 	#metrics;
@@ -29,8 +28,9 @@ export class PipelineEngine {
 	#maxInflight;
 	#onTaskTimeout;
 	#active = false;
-	#sweepTimer = null;
-	#sweepIntervalMs;
+	#sweeper;
+	/** 由 createFinalizeScheduler 创建的闭包，替代 #scheduleFinalizeCheck 方法 */
+	#scheduleFinalizeCheck;
 	/** @type {number} */
 	#nextBatchId = 1;
 
@@ -63,14 +63,36 @@ export class PipelineEngine {
 		this.#batchSize = batchSize;
 		this.#maxInflight = maxInflight;
 		this.#onTaskTimeout = onTaskTimeout ?? (() => {});
-		this.#sharedValueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
+
+		// 创建共享管道组件
+		this.#sweeper = createSweeper({
+			inflight: this.#inflight,
+			sweepIntervalMs: sweepInterval,
+			handleTaskTimeout: (task) => {
+				const error = prepareTaskTimeout(task, this.#metrics);
+				if (error) {
+					this.#settleTask(task, error, undefined);
+					this.#onTaskTimeout?.(task);
+				}
+			},
+		});
+		this.#scheduleFinalizeCheck = createFinalizeScheduler({
+			pendingFinalizeTasks: this.#pendingFinalizeTasks,
+			settleTask: (t, e, v) => this.#settleTask(t, e, v),
+			pumpQueue: () => this.#pumpQueue(),
+		});
+		this.#sharedValueParser = createJsonValueParser((raw) => {
+			handleParsedValue(raw, this.#inflight, {
+				afterSentinel: (task) => this.#afterSentinel(task),
+				rejectAll: (error) => this.rejectAll(error),
+			});
+		});
 		this.#processManager.setOnDrainCallback(() => this.#pumpQueue());
-		this.#sweepIntervalMs = sweepInterval;
 	}
 
 	/** 测试用：获取扫制定时器引用。 */
 	get _sweepTimer() {
-		return this.#sweepTimer;
+		return this.#sweeper?.getSweepTimer() ?? null;
 	}
 
 	/** 主任务队列（供事务延迟任务恢复使用）。 */
@@ -153,7 +175,7 @@ export class PipelineEngine {
 			task.walBatch = useWalBatch;
 		}
 		this.#inflight.push(...batch);
-		this.#scheduleSweep();
+		this.#sweeper.schedule();
 		this.#processManager.write(payload);
 	}
 
@@ -168,7 +190,7 @@ export class PipelineEngine {
 
 		// 已超时的 stream 任务：禁止继续喂给 rowParser（rowParser.reset 后 finished=false，
 		// 否则会触发 spurious onRow 回调）。数据直接走 sharedValueParser 由
-		// #handleParsedValue 中的 task.timedout 短路丢弃。
+		// handleParsedValue 中的 task.timedout 短路丢弃。
 		if (task.kind === "stream" && task.rowParser && !task.rowParser.finished && !task.timedout) {
 			const leftover = task.rowParser.feed(chunk);
 			if (leftover) this.#sharedValueParser.feed(leftover);
@@ -176,52 +198,6 @@ export class PipelineEngine {
 		}
 
 		this.#sharedValueParser.feed(chunk);
-	}
-
-	/**
-	 * 处理一个完整 JSON 值的解析结果。
-	 * 如果是 sentinel 行，则根据 stderr/consumerError 决定拒绝还是完成；
-	 * 否则按 query/stream 类型分别收集行数据或逐行回调。
-	 * @param {string} raw
-	 */
-	#handleParsedValue(raw) {
-		const task = this.#inflight.first;
-		if (!task) return;
-
-		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
-		if (isSentinelRaw(raw, task.token)) {
-			this.#inflight.shift();
-			this.#afterSentinel(task);
-			return;
-		}
-
-		// Fast path: 空数组 []，execute 的零行结果，跳过 JSON.parse
-		if (raw === "[]") return;
-
-		let parsed;
-		try {
-			parsed = JSON.parse(raw);
-		} catch (error) {
-			this.rejectAll(new Error(`Invalid JSON from sqlite3: ${toError(error).message}`));
-			return;
-		}
-
-		if (isSentinelRow(parsed, task.token)) {
-			this.#inflight.shift();
-			this.#afterSentinel(task);
-			return;
-		}
-
-		if (task.timedout) return;
-
-		if (task.kind === "query") {
-			collectQueryRows(task, parsed);
-			return;
-		}
-
-		if (task.kind === "stream") {
-			processStreamRows(task, parsed);
-		}
 	}
 
 	/**
@@ -313,46 +289,6 @@ export class PipelineEngine {
 		}
 	}
 
-	/**
-	 * 批量处理 pendingFinalize 任务，合并多次 setImmediate 为一次。
-	 */
-	#scheduleFinalizeCheck() {
-		if (this.#scheduledFinalize) return;
-		this.#scheduledFinalize = true;
-		setImmediate(() => {
-			this.#scheduledFinalize = false;
-			finalizePendingTasks(
-				this.#pendingFinalizeTasks,
-				(t, e, v) => this.#settleTask(t, e, v),
-				() => this.#pumpQueue(),
-			);
-		});
-	}
-
-	#scheduleSweep() {
-		if (this.#sweepTimer) return;
-		this.#sweepTimer = setTimeout(() => {
-			this.#sweepTimer = null;
-			const now = performance.now();
-			this.#inflight.forEach((task) => {
-				if (now - task.startTime > task.timeout) {
-					this.#handleTaskTimeout(task);
-				}
-			});
-			if (this.#inflight.count > 0) {
-				this.#scheduleSweep();
-			}
-		}, this.#sweepIntervalMs).unref();
-	}
-
-	#handleTaskTimeout(task) {
-		const error = prepareTaskTimeout(task, this.#metrics);
-		if (error) {
-			this.#settleTask(task, error, undefined);
-			this.#onTaskTimeout?.(task);
-		}
-	}
-
 	#settleTask(task, error, value) {
 		settleTask(task, error, value, this.#metrics, { resetRowParser: true });
 	}
@@ -389,8 +325,7 @@ export class PipelineEngine {
 	 */
 	kill() {
 		this.#active = false;
-		clearTimeout(this.#sweepTimer);
-		this.#sweepTimer = null;
+		this.#sweeper.clear();
 		this.rejectAll(new Error("PipelineEngine is killed"));
 	}
 }

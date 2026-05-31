@@ -107,8 +107,8 @@ export class Metrics {
 	 *   executeCount: number,
 	 *   queryCount: number,
 	 *   streamCount: number,
-	 *   avgQueryTime: number,
-	 *   qps: number,
+	 *   avgTaskDuration: number,
+	 *   throughput: number,
 	 *   uptime: number,
 	 * }}
 	 */
@@ -123,8 +123,8 @@ export class Metrics {
 			executeCount: this.#executeCount,
 			queryCount: this.#queryCount,
 			streamCount: this.#streamCount,
-			avgQueryTime: this.#tasksSuccess > 0 ? (this.#totalDuration / this.#tasksSuccess) : 0,
-			qps: elapsed > 0 ? (this.#tasksTotal / elapsed) : 0,
+			avgTaskDuration: this.#tasksSuccess > 0 ? (this.#totalDuration / this.#tasksSuccess) : 0,
+			throughput: elapsed > 0 ? (this.#tasksTotal / elapsed) : 0,
 			uptime: elapsed,
 		};
 	}

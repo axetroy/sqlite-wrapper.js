@@ -14,13 +14,13 @@ test("初始值全部为零", () => {
 	assert.equal(s.executeCount, 0);
 	assert.equal(s.queryCount, 0);
 	assert.equal(s.streamCount, 0);
-	assert.equal(s.avgQueryTime, 0);
+	assert.equal(s.avgTaskDuration, 0);
 });
 
-test("初始 qps 和 uptime 非负", () => {
+test("初始 throughput 和 uptime 非负", () => {
 	const m = new Metrics();
 	const s = m.snapshot();
-	assert.ok(s.qps >= 0);
+	assert.ok(s.throughput >= 0);
 	assert.ok(s.uptime >= 0);
 });
 
@@ -42,7 +42,7 @@ test("incrementTasksSuccess 记录成功数和累积耗时", () => {
 	m.incrementTasksSuccess(200);
 	assert.equal(m.snapshot().tasksSuccess, 2);
 	assert.equal(m.totalDuration, 300);
-	assert.equal(m.snapshot().avgQueryTime, 150);
+	assert.equal(m.snapshot().avgTaskDuration, 150);
 });
 
 test("incrementTasksFailed 增加失败数", () => {
@@ -87,19 +87,19 @@ test("多个 Metrics 实例互不干扰", () => {
 	assert.equal(b.executeCount, 2);
 });
 
-test("avgQueryTime 在无成功任务时返回 0", () => {
+test("avgTaskDuration 在无成功任务时返回 0", () => {
 	const m = new Metrics();
 	m.incrementTasksFailed();
-	assert.equal(m.snapshot().avgQueryTime, 0);
+	assert.equal(m.snapshot().avgTaskDuration, 0);
 });
 
-test("qps 不严格验证计算", () => {
+test("throughput 不严格验证计算", () => {
 	const m = new Metrics();
 	m.incrementTasksTotal("query");
 	m.incrementTasksTotal("query");
 	const s = m.snapshot();
-	assert.ok(s.qps >= 0);
-	assert.ok(s.qps === 0 || s.qps > 0);
+	assert.ok(s.throughput >= 0);
+	assert.ok(s.throughput === 0 || s.throughput > 0);
 });
 
 test("getter 与 snapshot 值一致", () => {

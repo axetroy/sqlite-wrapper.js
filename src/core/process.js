@@ -42,11 +42,6 @@ export class ProcessManager {
 		this.#onDrain = fn;
 	}
 
-	/** 写缓冲区非空或正在 draining 时为 true，供上游（pumpQueue）判断是否应暂停发送。 */
-	get hasPendingWrite() {
-		return this.#writeBuffer.length > 0 || this.#draining;
-	}
-
 	/**
 	 * 注册一个"缓冲排空"回调。
 	 * 若当前无缓冲且非 draining，回调会被立即同步调用；

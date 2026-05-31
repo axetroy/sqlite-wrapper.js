@@ -2,9 +2,9 @@ import { ProcessManager } from "./process.js";
 import { Queue } from "./queue.js";
 import { InflightTracker } from "./inflightTracker.js";
 import { createJsonValueParser, toError } from "./parser.js";
-import { isSentinelRaw, isSentinelRow, buildBatchPayload } from "./protocol.js";
-import { collectQueryRows, processStreamRows, settleTask } from "./settleUtils.js";
-import { finalizePendingTasks, prepareTaskTimeout } from "./pipelineUtils.js";
+import { buildBatchPayload } from "./protocol.js";
+import { settleTask } from "./settleUtils.js";
+import { handleParsedValue, createSweeper, createFinalizeScheduler, prepareTaskTimeout } from "./pipelineUtils.js";
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_INFLIGHT } from "../constants.js";
 
 /**
@@ -21,7 +21,6 @@ export class TaskWorker {
 	#pendingQueue = new Queue();
 	#inflight = new InflightTracker();
 	#pendingFinalizeTasks = new Set();
-	#scheduledFinalize = false;
 	#valueParser;
 	#statementTimeout;
 	#logger;
@@ -29,8 +28,9 @@ export class TaskWorker {
 	#batchSize;
 	#maxInflight;
 	#metrics;
-	#sweepTimer = null;
-	#sweepIntervalMs;
+	#sweeper;
+	/** 由 createFinalizeScheduler 创建的闭包，替代 #scheduleFinalizeCheck 方法 */
+	#scheduleFinalizeCheck;
 	/** @type {number} */
 	#nextBatchId = 1;
 
@@ -54,9 +54,28 @@ export class TaskWorker {
 		this.#batchSize = batchSize;
 		this.#maxInflight = maxInflight;
 		this.#metrics = metrics;
-		this.#sweepIntervalMs = sweepInterval;
+
+		// 创建共享管道组件
+		this.#sweeper = createSweeper({
+			inflight: this.#inflight,
+			sweepIntervalMs: sweepInterval,
+			handleTaskTimeout: (task) => {
+				const error = prepareTaskTimeout(task, this.#metrics);
+				if (error) this.#settleTask(task, error, undefined);
+			},
+		});
+		this.#scheduleFinalizeCheck = createFinalizeScheduler({
+			pendingFinalizeTasks: this.#pendingFinalizeTasks,
+			settleTask: (t, e, v) => this.#settleTask(t, e, v),
+			pumpQueue: () => this.#pumpQueue(),
+		});
+		this.#valueParser = createJsonValueParser((raw) => {
+			handleParsedValue(raw, this.#inflight, {
+				afterSentinel: (task) => this.#afterSentinel(task),
+				rejectAll: (error) => this.#rejectAll(error),
+			});
+		});
 		this.#processManager = new ProcessManager({ binary, database, initMode, onDrain: () => this.#pumpQueue() });
-		this.#valueParser = createJsonValueParser((raw) => this.#handleParsedValue(raw));
 		this.#startProcess();
 	}
 
@@ -99,7 +118,7 @@ export class TaskWorker {
 
 	/** 测试用：获取扫制定时器引用。 */
 	get _sweepTimer() {
-		return this.#sweepTimer;
+		return this.#sweeper?.getSweepTimer() ?? null;
 	}
 
 	/** 测试用：获取底层子进程引用。 */
@@ -109,8 +128,7 @@ export class TaskWorker {
 
 	/** 终止进程并清理。 */
 	kill() {
-		clearTimeout(this.#sweepTimer);
-		this.#sweepTimer = null;
+		this.#sweeper.clear();
 		this.#rejectAll(new Error(`${this.#name} is killed`));
 		this.#processManager.kill();
 	}
@@ -178,55 +196,11 @@ export class TaskWorker {
 			task.walBatch = useWalBatch;
 		}
 		this.#inflight.push(...batch);
-		this.#scheduleSweep();
+		this.#sweeper.schedule();
 		this.#processManager.write(payload);
 	}
 
-	/**
-	 * 单次 JSON 值到达时调用。
-	 * 按 FIFO 顺序匹配 inflightTasks[0] 的 sentinel token。
-	 */
-	#handleParsedValue(raw) {
-		const task = this.#inflight.first;
-		if (!task) return;
-
-		// Fast path: 原始字符串精确匹配 sentinel，跳过 JSON.parse
-		if (isSentinelRaw(raw, task.token)) {
-			this.#inflight.shift();
-			this.#afterSentinel(task);
-			return;
-		}
-
-		// Fast path: 空数组 []，execute 的零行结果，跳过 JSON.parse
-		if (raw === "[]") return;
-
-		let parsed;
-		try {
-			parsed = JSON.parse(raw);
-		} catch (error) {
-			this.#rejectAll(new Error(`Invalid JSON from sqlite3: ${toError(error).message}`));
-			return;
-		}
-
-		if (isSentinelRow(parsed, task.token)) {
-			this.#inflight.shift();
-			this.#afterSentinel(task);
-			return;
-		}
-
-		if (task.timedout) return;
-
-		if (task.kind === "query") {
-			collectQueryRows(task, parsed);
-			return;
-		}
-
-		if (task.kind === "stream") {
-			processStreamRows(task, parsed);
-		}
-	}
-
-	/** sentinel token 命中后的统一处理逻辑（与 PipelineEngine.#afterSentinel 结构一致）。 */
+	/** sentinel token 命中后的统一处理逻辑。 */
 	#afterSentinel(task) {
 		if (task.timedout) {
 			this.#pumpQueue();
@@ -251,18 +225,6 @@ export class TaskWorker {
 		this.#pendingFinalizeTasks.add(task);
 		this.#scheduleFinalizeCheck();
 		this.#pumpQueue();
-	}
-
-	/**
-	 * 批量处理 pendingFinalize 任务，合并多次 setImmediate 为一次。
-	 */
-	#scheduleFinalizeCheck() {
-		if (this.#scheduledFinalize) return;
-		this.#scheduledFinalize = true;
-		setImmediate(() => {
-			this.#scheduledFinalize = false;
-			finalizePendingTasks(this.#pendingFinalizeTasks, (t, e, v) => this.#settleTask(t, e, v), () => this.#pumpQueue());
-		});
 	}
 
 	#handleStderrChunk(chunk) {
@@ -300,34 +262,12 @@ export class TaskWorker {
 		}
 	}
 
-	#scheduleSweep() {
-		if (this.#sweepTimer) return;
-		this.#sweepTimer = setTimeout(() => {
-			this.#sweepTimer = null;
-			const now = performance.now();
-			this.#inflight.forEach((task) => {
-				if (now - task.startTime > task.timeout) {
-					this.#handleTaskTimeout(task);
-				}
-			});
-			if (this.#inflight.count > 0) {
-				this.#scheduleSweep();
-			}
-		}, this.#sweepIntervalMs).unref();
-	}
-
-	#handleTaskTimeout(task) {
-		const error = prepareTaskTimeout(task, this.#metrics);
-		if (error) this.#settleTask(task, error, undefined);
-	}
-
 	#settleTask(task, error, value) {
 		settleTask(task, error, value, this.#metrics);
 	}
 
 	#rejectAll(error) {
-		clearTimeout(this.#sweepTimer);
-		this.#sweepTimer = null;
+		this.#sweeper.clear();
 
 		const all = this.#inflight.toArray();
 		this.#inflight.clear();
