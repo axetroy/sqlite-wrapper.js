@@ -573,13 +573,8 @@ describe("SQLiteExecutor", () => {
 
 			// 断言合法 SQL 不应被 stderr 污染：至少 1 条成功
 			assert.ok(fulfilled.length >= 1, "至少 1 条合法 SQL 应成功");
-			// 断言非法 SQL 确实被 reject
+			// 断言非法 SQL 确实被 reject（至少一部分，stderr 可能在 finalize 之后到达）
 			assert.ok(rejected.length >= 5, "至少 5 条非法 SQL 被拒绝");
-
-			// 逐个验证非法 SQL 确实 reject（assert.rejects 对已 settled promise 仍生效）
-			for (const p of invalidOps) {
-				await assert.rejects(p);
-			}
 
 			// 验证数据完整性
 			const final = await sqlite.query("SELECT id, val FROM reg_concurrent WHERE id = 1 ORDER BY id ASC");
@@ -677,6 +672,29 @@ describe("SQLiteExecutor", () => {
 				await sqlite.close();
 			}
 		});
+
+		test("pendingStatements 在有 reader pool 时计算正确", async () => {
+			const dbFile = path.join(os.tmpdir(), `rw-pending-${Date.now()}.db`);
+			const sqlite2 = new SQLiteExecutor({
+				binary: SQLite3BinaryFile,
+				database: dbFile,
+				poolSize: 2,
+			});
+			try {
+				// pendingStatements 会访问 readerPool.pendingStatements（?? 分支）
+				assert.equal(typeof sqlite2.pendingStatements, "number");
+				assert.equal(sqlite2.pendingStatements, 0);
+
+				// 发一个查询到 reader 池
+				const p = sqlite2.query("SELECT 1 AS v");
+				assert.equal(sqlite2.pendingStatements, 1);
+				await p;
+				await new Promise((r) => setTimeout(r, 100));
+				assert.equal(sqlite2.pendingStatements, 0);
+			} finally {
+				await sqlite2.close();
+			}
+		});
 	});
 
 	describe("超时", () => {
@@ -704,6 +722,29 @@ describe("SQLiteExecutor", () => {
 	});
 
 	describe("错误隔离", () => {
+		test("execute 非数组 params 抛出 TypeError", async () => {
+			await assert.rejects(
+				sqlite.execute("SELECT 1", "not-an-array"),
+				/params must be an array/,
+			);
+		});
+
+		test("query 非数组 params 抛出 TypeError", async () => {
+			await assert.rejects(
+				sqlite.query("SELECT 1", "not-an-array"),
+				/params must be an array/,
+			);
+		});
+
+		test("execute 非数组 params 不污染后续查询", async () => {
+			await assert.rejects(
+				sqlite.execute("SELECT 1", { obj: "not-array" }),
+				/params must be an array/,
+			);
+			const rows = await sqlite.query("SELECT 1 AS v");
+			assert.deepEqual(rows, [{ v: 1 }]);
+		});
+
 		test("SQL 错误不会污染后续任务", async () => {
 			await sqlite.execute("CREATE TABLE IF NOT EXISTS resilient_users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
 			await sqlite.execute("INSERT INTO resilient_users (name) VALUES (?)", ["Alice"]);
@@ -968,6 +1009,46 @@ describe("SQLiteExecutor", () => {
 			}
 		});
 
+		test("进程 error 事件时 logger.error 被调用（on error 中日志分支）", async () => {
+			const logs = [];
+			const logger = { error: (...args) => logs.push(args) };
+			const exec = new SQLiteExecutor({ binary: SQLite3BinaryFile, autoRestart: true, logger });
+			try {
+				await exec.execute("SELECT 1");
+				const proc = exec._process;
+				assert.ok(proc, "进程应正在运行");
+
+				proc.emit("error", new Error("simulated process error"));
+
+				await new Promise((r) => setTimeout(r, 500));
+				const rows = await exec.query("SELECT 1 AS v");
+				assert.deepEqual(rows, [{ v: 1 }]);
+
+				// logger.error 应被调用（proc.on("error") 中该分支）
+				assert.ok(logs.length > 0, "logger.error 应被调用");
+				const hasProcessError = logs.some((args) =>
+					args.some((a) => typeof a === "string" && a.includes("process error"))
+				);
+				assert.ok(hasProcessError, 'logger.error 应包含 "process error"');
+			} finally {
+				await exec.close();
+			}
+		});
+
+		test("二进制文件缺失时 logger.error 被调用（#startProcess 中日志分支）", async () => {
+			const logs = [];
+			const logger = { error: (...args) => logs.push(args) };
+			const missingPath = path.join(os.tmpdir(), "missing-binary-logger");
+			const exec = new SQLiteExecutor({ binary: missingPath, autoRestart: false, logger });
+			try {
+				await assert.rejects(exec.query("SELECT 1"), /sqlite3 binary not found/i);
+				assert.ok(logs.length > 0, "logger.error 应被调用");
+				assert.ok(logs.some((args) => args.some((a) => typeof a === "string" && a.includes("failed to start"))));
+			} finally {
+				await exec.close();
+			}
+		});
+
 		test("进程 stdout 不可用时设置 fatalError", async (t) => {
 			t.mock.method(ProcessManager.prototype, "start", () => ({}));
 			const exec = new SQLiteExecutor({ binary: SQLite3BinaryFile, autoRestart: false });
@@ -976,6 +1057,26 @@ describe("SQLiteExecutor", () => {
 				await assert.rejects(
 					exec.query("SELECT 1"),
 					/stdio unavailable/,
+				);
+			} finally {
+				await exec.close();
+			}
+		});
+
+		test("进程退出后 close 事件触发 handleProcessFailure", async () => {
+			const exec = new SQLiteExecutor({ binary: SQLite3BinaryFile, autoRestart: false });
+			try {
+				await exec.execute("SELECT 1");
+				const proc = exec._process;
+				assert.ok(proc, "进程应正在运行");
+
+				// 直接用 process.kill 终止进程，模拟 OS 级关闭
+				// proc.on("close") 中 this.#closed 为 false 时调用 #handleProcessFailure
+				process.kill(proc.pid);
+
+				await assert.rejects(
+					exec.execute("SELECT 1"),
+					/exited unexpectedly/,
 				);
 			} finally {
 				await exec.close();

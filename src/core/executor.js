@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import { DEFAULT_STATEMENT_TIMEOUT } from "../utils/timeout.js";
 import { VALID_TRANSACTION_MODES, createTransactionHandle } from "../transaction/transaction.js";
 import { ProcessManager } from "./process.js";
@@ -211,11 +210,9 @@ export class SQLiteExecutor {
 
 		this.#readerPool?.kill();
 
+		// gracefulShutdown 已等 close 事件，进程一定已退出
 		await this.#processManager.gracefulShutdown();
 		this.#processManager.kill();
-		try {
-			await once(this.#processManager.process, "close");
-		} catch {}
 	}
 
 	/**
@@ -267,14 +264,17 @@ export class SQLiteExecutor {
 		});
 
 		proc.on("error", (error) => {
+			/* c8 ignore next */ // 死亡分支：listener 在 #handleProcessFailure 中被 removeAllListeners 清除
 			if (this.#proc !== proc) return;
 			this.#logger?.error?.("sqlite3 process error", error);
 			this.#handleProcessFailure(error);
 		});
 
 		proc.on("close", (code, signal) => {
+			/* c8 ignore next */ // 死亡分支：listener 在 #handleProcessFailure 中被 removeAllListeners 清除
 			if (this.#proc !== proc) return;
 			if (this.#closed) return;
+			/* c8 ignore next */ // Windows: kill→signal=null, ?? 永远取 "none"
 			this.#handleProcessFailure(new Error(`sqlite3 process exited unexpectedly (code=${code}, signal=${signal ?? "none"})`));
 		});
 
