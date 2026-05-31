@@ -114,6 +114,12 @@ export class Metrics {
 	 */
 	snapshot() {
 		const elapsed = (Date.now() - this.#startTime) / 1000;
+		let avgTaskDuration;
+		if (this.#tasksSuccess > 0) avgTaskDuration = this.#totalDuration / this.#tasksSuccess;
+		else avgTaskDuration = 0;
+		let throughput;
+		if (elapsed > 0) throughput = this.#tasksTotal / elapsed;
+		else throughput = 0;
 		return {
 			tasksTotal: this.#tasksTotal,
 			tasksSuccess: this.#tasksSuccess,
@@ -123,8 +129,8 @@ export class Metrics {
 			executeCount: this.#executeCount,
 			queryCount: this.#queryCount,
 			streamCount: this.#streamCount,
-			avgTaskDuration: this.#tasksSuccess > 0 ? (this.#totalDuration / this.#tasksSuccess) : 0,
-			throughput: elapsed > 0 ? (this.#tasksTotal / elapsed) : 0,
+			avgTaskDuration,
+			throughput,
 			uptime: elapsed,
 		};
 	}

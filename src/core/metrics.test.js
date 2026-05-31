@@ -93,37 +93,52 @@ test("avgTaskDuration 在无成功任务时返回 0", () => {
 	assert.equal(m.snapshot().avgTaskDuration, 0);
 });
 
-test("throughput 不严格验证计算", () => {
+test("throughput 在 elapsed>0 时为正", async () => {
 	const m = new Metrics();
 	m.incrementTasksTotal("query");
 	m.incrementTasksTotal("query");
+	// 在调用 snapshot() 之前等几毫秒确保 elapsed > 0
+	await new Promise((r) => setTimeout(r, 10));
 	const s = m.snapshot();
-	assert.ok(s.throughput >= 0);
-	assert.ok(s.throughput === 0 || s.throughput > 0);
+	assert.ok(s.throughput > 0);
 });
 
-	test("getter 与 snapshot 值一致", () => {
-		const m = new Metrics();
-		m.incrementTasksTotal("execute");
-		m.incrementTasksSuccess(50);
-		m.incrementTasksFailed();
-		m.incrementTasksTimeout();
-		m.incrementProcessRestarts();
-		const s = m.snapshot();
-		assert.equal(m.tasksTotal, s.tasksTotal);
-		assert.equal(m.tasksSuccess, s.tasksSuccess);
-		assert.equal(m.tasksFailed, s.tasksFailed);
-		assert.equal(m.tasksTimeout, s.tasksTimeout);
-		assert.equal(m.processRestarts, s.processRestarts);
-		assert.equal(m.executeCount, s.executeCount);
-		assert.equal(m.queryCount, s.queryCount);
-		assert.equal(m.streamCount, s.streamCount);
-	});
+test("throughput 在 elapsed=0 时返回 0（覆盖 ? : 0 分支）", () => {
+	// 不使用 t.mock.method 以避免与 c8 插桩的潜在互相干扰。
+	// 直接用原生的 Date.now 替换来固定时钟。
+	const orig = Date.now;
+	Date.now = () => 1000000;
+	try {
+		const m = new Metrics(); // #startTime = 1000000
+		const s = m.snapshot(); // elapsed = (1000000-1000000)/1000 = 0
+		assert.equal(s.throughput, 0);
+	} finally {
+		Date.now = orig;
+	}
+});
 
-	test("startTime getter 返回创建时的 Unix 毫秒时间戳", () => {
-		const m = new Metrics();
-		const now = Date.now();
-		assert.ok(typeof m.startTime === "number");
-		assert.ok(m.startTime >= now - 1000); // 在 1 秒内创建
-		assert.ok(m.startTime <= now + 1000);
-	});
+test("getter 与 snapshot 值一致", () => {
+	const m = new Metrics();
+	m.incrementTasksTotal("execute");
+	m.incrementTasksSuccess(50);
+	m.incrementTasksFailed();
+	m.incrementTasksTimeout();
+	m.incrementProcessRestarts();
+	const s = m.snapshot();
+	assert.equal(m.tasksTotal, s.tasksTotal);
+	assert.equal(m.tasksSuccess, s.tasksSuccess);
+	assert.equal(m.tasksFailed, s.tasksFailed);
+	assert.equal(m.tasksTimeout, s.tasksTimeout);
+	assert.equal(m.processRestarts, s.processRestarts);
+	assert.equal(m.executeCount, s.executeCount);
+	assert.equal(m.queryCount, s.queryCount);
+	assert.equal(m.streamCount, s.streamCount);
+});
+
+test("startTime getter 返回创建时的 Unix 毫秒时间戳", () => {
+	const m = new Metrics();
+	const now = Date.now();
+	assert.ok(typeof m.startTime === "number");
+	assert.ok(m.startTime >= now - 1000); // 在 1 秒内创建
+	assert.ok(m.startTime <= now + 1000);
+});
