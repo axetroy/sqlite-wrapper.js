@@ -83,6 +83,16 @@ describe("TaskWorker", () => {
 		test("name getter 返回构造时传入的名称", () => {
 			assert.equal(worker.name, "test-worker");
 		});
+
+		test("未指定 name 时使用默认值 'worker'", () => {
+			const tw = new TaskWorker({
+				binary: SQLite3BinaryFile,
+				database: ":memory:",
+				statementTimeout: 30000,
+			});
+			assert.equal(tw.name, "worker");
+			tw.kill();
+		});
 	});
 
 	describe("串行与批量", () => {
@@ -321,6 +331,119 @@ describe("TaskWorker", () => {
 			});
 			worker._process.emit("error", new Error("simulated process error"));
 			await assert.rejects(p, /simulated process error/);
+		});
+
+		test("logger.error 在进程 error 事件中被调用", async () => {
+			const errorLogs = [];
+			const logger = {
+				error: (msg, err) => errorLogs.push({ msg, err }),
+			};
+			const tw = new TaskWorker({
+				binary: SQLite3BinaryFile,
+				database: ":memory:",
+				statementTimeout: 30000,
+				name: "tw-log-test",
+				logger,
+			});
+
+			const p = new Promise((resolve, reject) => {
+				tw.enqueue({
+					kind: "query",
+					sql: "SELECT 1",
+					timeout: 10000,
+					token: "tok-log-test",
+					onRow: null,
+					resolve,
+					reject,
+				});
+			});
+
+			tw._process.emit("error", new Error("simulated error"));
+
+			await assert.rejects(p, /simulated error/);
+			assert.equal(errorLogs.length, 1);
+			assert.ok(errorLogs[0].msg.includes("tw-log-test"), `消息应包含 worker 名称: ${errorLogs[0].msg}`);
+			assert.equal(errorLogs[0].err.message, "simulated error");
+
+			tw.kill();
+		});
+
+		test("close 事件 signal 为 null 时使用 'none'", async () => {
+			const tw = new TaskWorker({
+				binary: SQLite3BinaryFile,
+				database: ":memory:",
+				statementTimeout: 30000,
+				name: "tw-close-null",
+			});
+
+			const p = new Promise((resolve, reject) => {
+				tw.enqueue({
+					kind: "query",
+					sql: "SELECT 1",
+					timeout: 10000,
+					token: "tok-close-null",
+					onRow: null,
+					resolve,
+					reject,
+				});
+			});
+
+			// 模拟进程正常退出（signal 为 null）
+			tw._process.emit("close", 0, null);
+
+			await assert.rejects(
+				p,
+				(err) => {
+					assert.ok(err.message.includes("signal=none"), `应包含 signal=none: ${err.message}`);
+					return true;
+				},
+			);
+
+			tw.kill();
+		});
+
+		test("error 事件中进程被替换时触发 stale 进程守卫", async () => {
+			const tw = new TaskWorker({
+				binary: SQLite3BinaryFile,
+				database: ":memory:",
+				statementTimeout: 30000,
+				name: "tw-stale-error",
+			});
+			const proc = tw._process;
+
+			// 阻止 kill 移除事件监听器，模拟旧 listener 残留
+			const origRemoveAll = proc.removeAllListeners.bind(proc);
+			proc.removeAllListeners = () => proc;
+
+			tw.kill(); // #proc → null, 但 error/close 监听器仍在
+
+			// 在旧进程上触发 error → #processManager.process === null !== proc → 守卫 return
+			// 守卫返回后不会 rejectAll（防止双重重拒绝）
+			proc.emit("error", new Error("stale process error"));
+
+			// 恢复清理
+			proc.removeAllListeners = origRemoveAll;
+			proc.removeAllListeners();
+		});
+
+		test("close 事件中进程被替换时触发 stale 进程守卫", async () => {
+			const tw = new TaskWorker({
+				binary: SQLite3BinaryFile,
+				database: ":memory:",
+				statementTimeout: 30000,
+				name: "tw-stale-close",
+			});
+			const proc = tw._process;
+
+			const origRemoveAll = proc.removeAllListeners.bind(proc);
+			proc.removeAllListeners = () => proc;
+
+			tw.kill();
+
+			proc.emit("close", 0, null);
+
+			proc.removeAllListeners = origRemoveAll;
+			proc.removeAllListeners();
 		});
 	});
 
