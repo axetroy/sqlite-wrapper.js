@@ -4,6 +4,7 @@ import path from "node:path";
 import test, { afterEach, beforeEach, describe } from "node:test";
 
 import { TaskWorker } from "./taskWorker.js";
+import { Metrics } from "./metrics.js";
 import downloadSQLite3 from "../../script/download-sqlite3.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -505,6 +506,92 @@ describe("TaskWorker", () => {
 			assert.equal(results[2].status, "fulfilled", "t3 应正常完成");
 			assert.deepEqual(results[2].value, [{ v: 2 }], "t3 结果正确");
 
+			tw.kill();
+		});
+	});
+
+	describe("Metrics 集成", () => {
+		test("传入 metrics 后 enqueue 递增指标", async () => {
+			const metrics = new Metrics();
+			const tw = new TaskWorker({
+				binary: SQLite3BinaryFile,
+				database: ":memory:",
+				statementTimeout: 30000,
+				name: "tw-metrics",
+				metrics,
+			});
+			try {
+				await new Promise((resolve, reject) => {
+					tw.enqueue({
+						kind: "query",
+						sql: "SELECT 1 AS v",
+						timeout: 10000,
+						token: "tok-metrics",
+						onRow: null,
+						resolve,
+						reject,
+					});
+				});
+				// enqueue 时 metrics.incrementTasksTotal 被调用
+				assert.equal(metrics.tasksTotal, 1);
+				assert.equal(metrics.queryCount, 1);
+			} finally {
+				tw.kill();
+			}
+		});
+	});
+
+	describe("JSON 解析错误", () => {
+		test("stdout 输出非 JSON 数据触发 rejectAll", async () => {
+			const tw = new TaskWorker({
+				binary: SQLite3BinaryFile,
+				database: ":memory:",
+				statementTimeout: 30000,
+				name: "tw-json-err",
+			});
+
+			const p = new Promise((resolve, reject) => {
+				tw.enqueue({
+					kind: "query",
+					sql: "SELECT 1",
+					timeout: 10000,
+					token: "tok-json-err",
+					onRow: null,
+					resolve,
+					reject,
+				});
+			});
+
+			// 在 sqlite3 进程回应之前向 stdout 注入非法 JSON
+			tw._process.stdout.emit("data", "{invalid}");
+
+			await assert.rejects(p, /Invalid JSON from sqlite3/);
+			tw.kill();
+		});
+	});
+
+	describe("流式查询 consumerError", () => {
+		test("stream onRow 抛出异常触发立即 reject", async () => {
+			const tw = new TaskWorker({
+				binary: SQLite3BinaryFile,
+				database: ":memory:",
+				statementTimeout: 30000,
+				name: "tw-consumer-err",
+			});
+
+			const p = new Promise((resolve, reject) => {
+				tw.enqueue({
+					kind: "stream",
+					sql: "SELECT 1 AS v UNION SELECT 2 AS v",
+					timeout: 10000,
+					token: "tok-consumer",
+					onRow: () => { throw new Error("consumer broke"); },
+					resolve,
+					reject,
+				});
+			});
+
+			await assert.rejects(p, /consumer broke/);
 			tw.kill();
 		});
 	});
